@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic
+pydantic-settings
+psycopg2-binary
+python-dotenv
+pytest
+httpx
+python-multipart
+pillow
+pillow-heif
+zxing-cpp
+cryptography

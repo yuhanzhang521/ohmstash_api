@@ -1,0 +1,999 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OhmStash</title>
+    <script>
+        (() => {
+            const theme = window.localStorage.getItem("ohmstash_theme");
+            if (theme === "dark" || theme === "light") {
+                document.documentElement.dataset.theme = theme;
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-mark">Ω</div>
+                <div>
+                    <h1>OhmStash</h1>
+                    <span id="service-text">连接中</span>
+                </div>
+            </div>
+            <nav class="nav" aria-label="主导航">
+                <button class="nav-button active" type="button" data-view="dashboard">首页</button>
+                <button class="nav-button" type="button" data-view="recognition">识别入库</button>
+                <button class="nav-button" type="button" data-view="manage">管理</button>
+                <button class="nav-button" type="button" data-view="boxes">盒子</button>
+                <button class="nav-button" type="button" data-view="search">搜索</button>
+                <button class="nav-button" type="button" data-view="settings">设置</button>
+            </nav>
+        </aside>
+
+        <main class="workspace">
+            <header class="topbar">
+                <div>
+                    <h2 id="view-title">首页</h2>
+                    <p id="view-subtitle">查看库存概览、未入库器件和近期盒子。</p>
+                </div>
+                <div class="top-actions">
+                    <button class="secondary-button" type="button" data-action="refresh-all">刷新</button>
+                    <button class="secondary-button" type="button" data-action="logout">退出</button>
+                </div>
+            </header>
+
+            <section class="metric-strip">
+                <article><span>元器件</span><strong id="metric-components">0</strong></article>
+                <article><span>标签</span><strong id="metric-tags">0</strong></article>
+                <article><span>盒子</span><strong id="metric-boxes">0</strong></article>
+                <article><span>库存</span><strong id="metric-inventory">0</strong></article>
+            </section>
+
+            <section class="view active" id="view-dashboard" data-view-panel="dashboard">
+                <div class="dashboard-layout">
+                    <section class="panel">
+                        <div class="panel-heading">
+                            <h3>库存概览</h3>
+                            <span id="dashboard-summary">等待加载</span>
+                        </div>
+                        <div class="dashboard-stat-grid">
+                            <article>
+                                <span>已入库器件</span>
+                                <strong id="dashboard-placed-count">0</strong>
+                            </article>
+                            <article>
+                                <span>未入库器件</span>
+                                <strong id="dashboard-unplaced-count">0</strong>
+                            </article>
+                            <article>
+                                <span>空位</span>
+                                <strong id="dashboard-empty-slot-count">0</strong>
+                            </article>
+                            <article>
+                                <span>整理箱</span>
+                                <strong id="dashboard-bulk-count">0</strong>
+                            </article>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-heading">
+                            <h3>快捷操作</h3>
+                        </div>
+                        <div class="quick-actions">
+                            <button class="primary-button" type="button" data-action="new-component">新增器件</button>
+                            <button class="secondary-button" type="button" data-view="recognition">拍照批量入库</button>
+                            <button class="secondary-button" type="button" data-view="boxes">新增盒子</button>
+                        </div>
+                    </section>
+                </div>
+
+                <section class="panel">
+                    <div class="panel-heading">
+                        <h3>未入库</h3>
+                        <span id="dashboard-unplaced-label">0 个</span>
+                    </div>
+                    <div class="item-list" id="dashboard-unplaced-list"></div>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-heading">
+                        <h3>近期盒子</h3>
+                        <span id="dashboard-box-label">0 个</span>
+                    </div>
+                    <div class="box-grid" id="dashboard-box-list"></div>
+                </section>
+            </section>
+
+            <section class="view" id="view-recognition" data-view-panel="recognition">
+                <div class="recognition-layout">
+                    <section class="panel capture-panel">
+                        <h3>拍照识别</h3>
+                        <form class="form-stack" id="recognition-form">
+                            <label>
+                                模式
+                                <select id="recognition-mode">
+                                    <option value="existing_box">更新已有盒子</option>
+                                    <option value="new_box">按模板新建盒子</option>
+                                    <option value="auto_template_box">识别样式并新建模板</option>
+                                </select>
+                            </label>
+                            <label id="recognition-box-line">
+                                盒子
+                                <div class="field-with-button">
+                                    <select id="recognition-box-id"></select>
+                                    <button class="secondary-button" type="button" data-action="scan-recognition-box">扫码</button>
+                                </div>
+                            </label>
+                            <label id="recognition-template-line" class="hidden">
+                                盒子模板
+                                <select id="recognition-template-id"></select>
+                            </label>
+                            <label id="recognition-layout-line" class="hidden">
+                                预选布局
+                                <select id="recognition-layout-type">
+                                    <option value="grid">规则网格</option>
+                                    <option value="irregular">不规则网格</option>
+                                </select>
+                            </label>
+                            <label class="switch-line" id="recognition-overwrite-line">
+                                <input id="recognition-overwrite-existing" type="checkbox" checked>
+                                覆盖已识别格子的原库存
+                            </label>
+                            <label>
+                                图片
+                                <input id="recognition-file" type="file" accept="image/*,.heic,.heif" required>
+                            </label>
+                            <div class="image-preview hidden" id="recognition-file-preview"></div>
+                            <label>
+                                补充要求
+                                <textarea id="recognition-prompt" rows="3" placeholder="例如：优先识别贴片阻容，忽略标签纸背景。"></textarea>
+                            </label>
+                            <button class="primary-button" id="recognition-submit-button" type="submit">上传识别</button>
+                        </form>
+                        <div class="inline-actions recognition-actions">
+                            <button class="primary-button" type="button" data-action="confirm-box-recognition">确认入库</button>
+                        </div>
+                        <div class="recognized-info-panel hidden" id="recognized-info-panel">
+                            <h4>盒子信息</h4>
+                            <div class="recognized-box-fields hidden" id="recognized-box-fields">
+                                <label>
+                                    盒子名称
+                                    <input id="recognized-box-name" type="text" placeholder="由 AI 建议，可修改">
+                                </label>
+                                <label>
+                                    盒子编号
+                                    <input id="recognized-box-readable-id" type="text" placeholder="留空自动生成 BOX-0001">
+                                </label>
+                            </div>
+                            <div class="recognized-template-fields hidden" id="recognized-template-fields">
+                                <label>
+                                    模板名称
+                                    <input id="recognized-template-name" type="text" placeholder="例如：4x7格">
+                                </label>
+                                <label id="recognized-template-rows-line">
+                                    行
+                                    <input id="recognized-template-rows" type="number" min="1" value="1">
+                                </label>
+                                <label id="recognized-template-cols-line">
+                                    列
+                                    <input id="recognized-template-cols" type="number" min="1" value="1">
+                                </label>
+                                <label class="full-span" id="recognized-template-layout-json-line">
+                                    不规则布局 JSON
+                                    <textarea id="recognized-template-layout-json" rows="4" placeholder='[{"id":"A1","label":"左上"}]'></textarea>
+                                </label>
+                                <div class="layout-preview full-span" id="recognized-template-preview"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel result-panel">
+                        <div class="panel-heading">
+                            <h3>识别结果</h3>
+                            <div class="panel-tools">
+                                <span id="recognition-summary">暂无结果</span>
+                                <button class="secondary-button" id="recognition-edit-toggle" type="button" data-action="toggle-recognition-edit-mode">编辑</button>
+                                <label class="inline-field">
+                                    搜索源
+                                    <select id="verification-search-provider-id"></select>
+                                </label>
+                                <button class="secondary-button" type="button" data-action="toggle-recognition-verification">全选</button>
+                                <button class="secondary-button" type="button" data-action="verify-selected-components">联网搜索选中</button>
+                            </div>
+                        </div>
+                        <div class="recognition-result" id="ai-result-viewer">
+                            <div class="empty-panel">上传图片后在这里确认名称、标签和数量。</div>
+                        </div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="view" id="view-manage" data-view-panel="manage">
+                <section class="panel">
+                    <div class="panel-heading">
+                        <h3>库存管理</h3>
+                        <div class="manage-heading-actions">
+                            <div class="segmented-control" role="tablist">
+                                <button class="segment-button active" type="button" data-action="set-manage-mode" data-mode="boxes">按盒子</button>
+                                <button class="segment-button" type="button" data-action="set-manage-mode" data-mode="categories">按分类</button>
+                                <button class="segment-button" type="button" data-action="set-manage-mode" data-mode="components">按器件</button>
+                            </div>
+                            <button class="secondary-button" type="button" data-action="new-component">新建器件</button>
+                            <button class="secondary-button" type="button" data-action="open-box-scanner">扫码进盒</button>
+                        </div>
+                    </div>
+                    <div class="filter-grid">
+                        <label>
+                            关键字
+                            <input id="manage-query" type="search" placeholder="型号、名称、盒号、备注">
+                        </label>
+                        <label>
+                            标签
+                            <select id="manage-tag-filter"></select>
+                        </label>
+                        <label>
+                            属性筛选
+                            <input id="manage-attribute-filter" type="text" placeholder="封装=0603; 阻值=10K">
+                        </label>
+                    </div>
+                    <details class="unplaced-drawer" id="unplaced-drawer">
+                        <summary>
+                            <span>未入库</span>
+                            <strong id="unplaced-count">0</strong>
+                        </summary>
+                        <div class="item-list" id="unplaced-list"></div>
+                    </details>
+                </section>
+
+                <div class="manage-layout" id="manage-layout">
+                    <section class="panel manage-list-panel" id="manage-list-panel">
+                        <div class="panel-heading">
+                            <h3 id="manage-list-title">盒子</h3>
+                            <span id="manage-result-count">0 项</span>
+                        </div>
+                        <div class="item-list dense-list" id="manage-list"></div>
+                    </section>
+
+                    <section class="panel manage-detail-panel" id="manage-detail-panel">
+                        <div class="panel-heading">
+                            <h3 id="manage-detail-title">盒内布局</h3>
+                            <span id="manage-detail-subtitle">选择一个盒子</span>
+                        </div>
+                        <div id="manage-box-detail" class="box-detail">
+                            <div class="empty-panel compact-empty">从左侧进入盒子后，可点击格子编辑库存和器件信息。</div>
+                        </div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="view" id="view-boxes" data-view-panel="boxes">
+                <div class="split-layout">
+                    <section class="panel">
+                        <div class="panel-heading">
+                            <h3>盒子模板</h3>
+                            <button class="secondary-button" type="button" data-action="clear-template-form">新建</button>
+                        </div>
+                        <form class="form-grid" id="template-form">
+                            <label>
+                                名称
+                                <input id="template-name" type="text" placeholder="4x7格" required>
+                            </label>
+                            <label>
+                                布局
+                                <select id="template-layout-type">
+                                    <option value="grid">规则网格</option>
+                                    <option value="irregular">不规则</option>
+                                </select>
+                            </label>
+                            <label id="template-rows-line">
+                                行
+                                <input id="template-rows" type="number" min="1" value="7">
+                            </label>
+                            <label id="template-cols-line">
+                                列
+                                <input id="template-cols" type="number" min="1" value="4">
+                            </label>
+                            <label class="full-span" id="template-layout-json-line">
+                                不规则布局 JSON
+                                <textarea id="template-layout-json" rows="4" placeholder='[{"id":"A1","label":"左上"}]'></textarea>
+                            </label>
+                            <div class="layout-preview full-span" id="template-layout-preview"></div>
+                            <button class="primary-button full-span" id="template-submit-button" type="submit">保存模板</button>
+                        </form>
+                        <div class="recognize-strip">
+                            <label>
+                                拍照识别模板
+                                <input id="template-recognition-file" type="file" accept="image/*,.heic,.heif">
+                            </label>
+                            <div class="image-preview hidden" id="template-recognition-file-preview"></div>
+                            <label>
+                                预选布局
+                                <select id="template-recognition-layout-type">
+                                    <option value="irregular">不规则网格</option>
+                                    <option value="grid">规则网格</option>
+                                </select>
+                            </label>
+                            <label class="full-span">
+                                补充要求
+                                <input id="template-recognition-prompt" type="text" placeholder="例如：只识别格子，不需要识别器件。">
+                            </label>
+                            <button class="secondary-button full-span" id="template-recognition-button" type="button" data-action="recognize-template-layout">识别并填入模板</button>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-heading">
+                            <h3>盒子</h3>
+                            <button class="secondary-button" type="button" data-action="clear-box-form">新建</button>
+                        </div>
+                        <form class="form-grid" id="box-form">
+                            <label>
+                                名称
+                                <input id="box-name" type="text" placeholder="电源芯片">
+                            </label>
+                            <label>
+                                编号
+                                <input id="box-readable-id" type="text" placeholder="留空自动生成">
+                            </label>
+                            <label class="full-span">
+                                模板
+                                <select id="box-template-id" required></select>
+                            </label>
+                            <button class="primary-button full-span" id="box-submit-button" type="submit">创建盒子并生成标签</button>
+                        </form>
+                    </section>
+                </div>
+
+                <section class="panel">
+                    <div class="panel-heading">
+                        <h3>盒子标签</h3>
+                        <a class="secondary-button disabled-link" id="label-download-link" href="#" download>下载 WDFX</a>
+                    </div>
+                    <div class="label-preview" id="label-preview">创建或选择盒子后显示 30x15mm 标签和 WDFX 下载。</div>
+                </section>
+
+                <div class="split-layout">
+                    <section class="panel">
+                        <div class="panel-heading">
+                            <h3>模板列表</h3>
+                            <span id="template-count">0 个</span>
+                        </div>
+                        <div class="item-list" id="template-list"></div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-heading">
+                            <h3>盒子列表</h3>
+                            <span id="box-count">0 个</span>
+                        </div>
+                        <div class="box-grid" id="box-list"></div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="view" id="view-search" data-view-panel="search">
+                <section class="panel">
+                    <h3>搜索</h3>
+                    <form class="form-grid" id="search-form">
+                        <label>
+                            方式
+                            <select id="search-mode">
+                                <option value="keyword">关键字搜索</option>
+                                <option value="ai">AI 搜索</option>
+                            </select>
+                        </label>
+                        <label class="full-span">
+                            搜索内容
+                            <textarea id="search-query" rows="3" placeholder="10K 0603 BOX-0001，或描述你要找的器件需求。"></textarea>
+                        </label>
+                        <button class="primary-button full-span" id="search-submit-button" type="submit">搜索</button>
+                        <div class="ai-search-summary hidden full-span" id="ai-search-summary"></div>
+                    </form>
+                </section>
+                <div class="split-layout">
+                    <section class="panel">
+                        <h3>推荐空位</h3>
+                        <form class="form-grid" id="recommendation-form">
+                            <label class="full-span">
+                                器件描述
+                                <input id="recommendation-text" type="text" placeholder="STM32F103C8T6 最小系统板">
+                            </label>
+                            <label>
+                                标签
+                                <input id="recommendation-tags" type="text" placeholder="IC/MCU, 模块">
+                            </label>
+                            <label>
+                                优先盒子
+                                <select id="recommendation-box-id"></select>
+                            </label>
+                            <button class="primary-button full-span" type="submit">推荐</button>
+                        </form>
+                    </section>
+                </div>
+                <section class="panel">
+                    <h3>结果</h3>
+                    <div class="item-list" id="search-result-list"></div>
+                    <div class="item-list" id="recommendation-list"></div>
+                </section>
+            </section>
+
+            <section class="view" id="view-settings" data-view-panel="settings">
+                <div class="settings-tabs">
+                    <button class="settings-tab active" type="button" data-settings-view="ai">AI 供应商</button>
+                    <button class="settings-tab" type="button" data-settings-view="search-providers">联网搜索</button>
+                    <button class="settings-tab" type="button" data-settings-view="tags">标签库</button>
+                    <button class="settings-tab" type="button" data-settings-view="logs">日志</button>
+                    <button class="settings-tab" type="button" data-settings-view="server">服务</button>
+                    <button class="settings-tab" type="button" data-settings-view="account">账户</button>
+                </div>
+
+                <section class="settings-panel active" data-settings-panel="ai">
+                    <div class="split-layout">
+                        <section class="panel">
+                            <h3>供应商配置</h3>
+                            <form class="form-grid" id="vlm-form">
+                                <label>
+                                    名称
+                                    <input id="vlm-name" type="text" required>
+                                </label>
+                                <label>
+                                    提供商
+                                    <select id="vlm-provider" required>
+                                        <option value="openai-compatible">OpenAI Compatible</option>
+                                        <option value="openai">OpenAI</option>
+                                        <option value="siliconflow">SiliconFlow</option>
+                                        <option value="custom">Custom</option>
+                                    </select>
+                                </label>
+                                <label class="full-span">
+                                    Base URL
+                                    <input id="vlm-base-url" type="url" placeholder="https://example.com/v1">
+                                </label>
+                                <label>
+                                    模型
+                                    <input id="vlm-model-name" type="text" required>
+                                </label>
+                                <label>
+                                    API Key
+                                    <input id="vlm-api-key" type="password" autocomplete="new-password" placeholder="留空保留原密钥">
+                                </label>
+                                <label>
+                                    请求超时（秒）
+                                    <input id="vlm-timeout-seconds" type="number" min="10" max="600" value="90">
+                                </label>
+                                <label class="switch-line full-span">
+                                    <input id="vlm-active" type="checkbox" checked>
+                                    启用
+                                </label>
+                                <div class="inline-actions full-span">
+                                    <button class="primary-button" id="vlm-submit-button" type="submit">保存供应商</button>
+                                    <button class="secondary-button" type="button" data-action="test-current-vlm-form">测试当前表单</button>
+                                    <button class="secondary-button" type="button" data-action="clear-vlm-form">新建</button>
+                                </div>
+                            </form>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-heading">
+                                <h3>供应商列表</h3>
+                                <span id="default-vlm-label">未设置默认</span>
+                            </div>
+                            <div class="provider-list" id="vlm-config-list"></div>
+                        </section>
+                    </div>
+                </section>
+
+                <section class="settings-panel" data-settings-panel="search-providers">
+                    <div class="split-layout">
+                        <section class="panel">
+                            <h3>搜索源配置</h3>
+                            <form class="form-grid" id="search-provider-form">
+                                <label>
+                                    名称
+                                    <input id="search-provider-name" type="text" required>
+                                </label>
+                                <label>
+                                    类型
+                                    <select id="search-provider-type" required>
+                                        <option value="brave">Brave Search API</option>
+                                        <option value="tavily">Tavily</option>
+                                        <option value="openai_web_search">OpenAI Web Search</option>
+                                        <option value="duckduckgo">DuckDuckGo HTML</option>
+                                    </select>
+                                </label>
+                                <label class="full-span">
+                                    API Key
+                                    <input id="search-provider-api-key" type="password" autocomplete="new-password" placeholder="DuckDuckGo 可留空；编辑时留空保留原密钥">
+                                </label>
+                                <label id="search-provider-model-line">
+                                    OpenAI 模型
+                                    <input id="search-provider-model-name" type="text" placeholder="gpt-4.1-mini">
+                                </label>
+                                <label id="search-provider-base-url-line">
+                                    Base URL
+                                    <input id="search-provider-base-url" type="url" placeholder="OpenAI 默认 https://api.openai.com/v1">
+                                </label>
+                                <div class="muted-text hidden full-span" id="search-provider-test-result"></div>
+                                <label class="switch-line full-span">
+                                    <input id="search-provider-active" type="checkbox" checked>
+                                    启用
+                                </label>
+                                <div class="inline-actions full-span">
+                                    <button class="primary-button" id="search-provider-submit-button" type="submit">保存搜索源</button>
+                                    <button class="secondary-button" type="button" data-action="test-current-search-provider-form">测试当前表单</button>
+                                    <button class="secondary-button" type="button" data-action="clear-search-provider-form">新建</button>
+                                </div>
+                            </form>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-heading">
+                                <h3>搜索源列表</h3>
+                                <span id="default-search-provider-label">默认：DuckDuckGo HTML</span>
+                            </div>
+                            <div class="provider-list" id="search-provider-list"></div>
+                        </section>
+                    </div>
+                </section>
+
+                <section class="settings-panel" data-settings-panel="tags">
+                    <div class="split-layout">
+                        <section class="panel">
+                            <div class="panel-heading">
+                                <h3>标签编辑</h3>
+                                <button class="secondary-button" type="button" data-action="clear-tag-form">新建</button>
+                            </div>
+                            <form class="form-stack" id="tag-form">
+                                <label>
+                                    标签名
+                                    <input id="tag-name" type="text" placeholder="IC/电源芯片" required>
+                                </label>
+                                <label>
+                                    属性定义
+                                    <input id="tag-attributes-text" type="text" placeholder="型号, 封装, 输入电压">
+                                </label>
+                                <div class="inline-actions">
+                                    <button class="primary-button" id="tag-submit-button" type="submit">保存标签</button>
+                                    <button class="danger-button hidden" id="tag-delete-button" type="button" data-action="delete-selected-tag">删除当前标签</button>
+                                </div>
+                            </form>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-heading">
+                                <h3>默认标签库</h3>
+                                <button class="primary-button" type="button" data-action="seed-default-tags">导入默认分类</button>
+                            </div>
+                            <div class="tag-board" id="tag-board"></div>
+                        </section>
+                    </div>
+                </section>
+
+                <section class="settings-panel" data-settings-panel="logs">
+                    <div class="split-layout">
+                        <section class="panel">
+                            <h3>日志设置</h3>
+                            <form class="form-grid" id="log-settings-form">
+                                <label>
+                                    Level
+                                    <select id="log-level">
+                                        <option value="DEBUG">DEBUG</option>
+                                        <option value="INFO">INFO</option>
+                                        <option value="WARNING">WARNING</option>
+                                        <option value="ERROR">ERROR</option>
+                                        <option value="CRITICAL">CRITICAL</option>
+                                    </select>
+                                </label>
+                                <button class="primary-button full-span" type="submit">保存日志设置</button>
+                            </form>
+                            <p class="muted-text" id="log-file-path"></p>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-heading">
+                                <h3>最近日志</h3>
+                                <div class="inline-actions">
+                                    <button class="secondary-button" type="button" data-action="refresh-logs">刷新</button>
+                                    <button class="secondary-button" type="button" data-action="clear-log-view">清空显示</button>
+                                </div>
+                            </div>
+                            <pre class="log-viewer" id="log-viewer">暂无日志。</pre>
+                        </section>
+                    </div>
+                </section>
+
+                <section class="settings-panel" data-settings-panel="server">
+                    <div class="settings-layout">
+                        <section class="panel settings-form-panel">
+                            <div class="panel-heading">
+                                <h3>服务监听</h3>
+                                <span>保存后需要重启服务</span>
+                            </div>
+                            <form class="form-grid settings-form" id="server-config-form">
+                                <h4 class="form-section-title full-span">基础监听</h4>
+                                <label>
+                                    监听地址
+                                    <input id="server-host" type="text" required>
+                                </label>
+                                <label>
+                                    HTTP 端口
+                                    <input id="server-http-port" type="number" min="1" max="65535" required>
+                                </label>
+                                <label class="switch-line full-span">
+                                    <input id="server-https-enabled" type="checkbox">
+                                    启用 HTTPS
+                                </label>
+
+                                <div class="form-subsection full-span hidden" id="server-https-options">
+                                    <div class="form-section-heading">
+                                        <h4>HTTPS 配置</h4>
+                                        <span>证书来源一次只选择一种</span>
+                                    </div>
+                                    <div class="form-grid nested-form-grid">
+                                        <label>
+                                            HTTPS 端口
+                                            <input id="server-https-port" type="number" min="1" max="65535" required>
+                                        </label>
+                                        <div class="certificate-source-field">
+                                            <span class="field-label">证书来源</span>
+                                            <div class="segmented-control certificate-source-control" role="radiogroup" aria-label="证书来源">
+                                                <button class="segment-button" type="button" role="radio" data-action="set-server-certificate-source" data-certificate-source="self-signed">自动自签名</button>
+                                                <button class="segment-button" type="button" role="radio" data-action="set-server-certificate-source" data-certificate-source="acme">ACME</button>
+                                                <button class="segment-button" type="button" role="radio" data-action="set-server-certificate-source" data-certificate-source="path">文件路径</button>
+                                                <button class="segment-button" type="button" role="radio" data-action="set-server-certificate-source" data-certificate-source="upload">上传 PEM</button>
+                                                <button class="segment-button" type="button" role="radio" data-action="set-server-certificate-source" data-certificate-source="paste">粘贴 PEM</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="certificate-source-panel" data-certificate-source-panel="self-signed">
+                                        <p class="muted-text">不提供证书时，服务会自动生成并使用自签名证书。</p>
+                                    </div>
+
+                                    <div class="certificate-source-panel form-grid hidden" data-certificate-source-panel="acme">
+                                        <label>
+                                            域名
+                                            <input id="server-acme-domain" type="text" placeholder="ohmstash.example.com">
+                                        </label>
+                                        <label>
+                                            ACME 邮箱
+                                            <input id="server-acme-email" type="email" placeholder="admin@example.com">
+                                        </label>
+                                        <div class="certificate-source-field full-span">
+                                            <span class="field-label">验证方式</span>
+                                            <div class="segmented-control certificate-source-control" role="radiogroup" aria-label="ACME 验证方式">
+                                                <button class="segment-button" type="button" role="radio" data-action="set-server-acme-challenge" data-acme-challenge="http-01">HTTP-01</button>
+                                                <button class="segment-button" type="button" role="radio" data-action="set-server-acme-challenge" data-acme-challenge="dns-01">DNS-01</button>
+                                            </div>
+                                        </div>
+                                        <p class="muted-text full-span" data-acme-challenge-panel="http-01">HTTP-01 会固定 HTTP 80 和 HTTPS 443。</p>
+                                        <label class="full-span hidden" data-acme-challenge-panel="dns-01">
+                                            Cloudflare API Token
+                                            <input id="server-acme-cloudflare-token" type="password" autocomplete="new-password" placeholder="留空表示保留已保存的 Token">
+                                            <span class="field-status" id="server-acme-cloudflare-token-status">未保存 Token</span>
+                                        </label>
+                                    </div>
+
+                                    <div class="certificate-source-panel form-grid hidden" data-certificate-source-panel="path">
+                                        <label>
+                                            证书文件路径
+                                            <input id="server-ssl-certfile" type="text" placeholder="/etc/ssl/ohmstash.crt">
+                                        </label>
+                                        <label>
+                                            私钥文件路径
+                                            <input id="server-ssl-keyfile" type="text" placeholder="/etc/ssl/ohmstash.key">
+                                        </label>
+                                    </div>
+
+                                    <div class="certificate-source-panel form-grid hidden" data-certificate-source-panel="upload">
+                                        <label>
+                                            上传证书 PEM
+                                            <input id="server-ssl-cert-upload" type="file" accept=".pem,.crt,.cer,.txt">
+                                            <span class="field-status" id="server-ssl-cert-upload-status">未选择文件</span>
+                                        </label>
+                                        <label>
+                                            上传私钥 PEM
+                                            <input id="server-ssl-key-upload" type="file" accept=".pem,.key,.txt">
+                                            <span class="field-status" id="server-ssl-key-upload-status">未选择文件</span>
+                                        </label>
+                                    </div>
+
+                                    <div class="certificate-source-panel form-grid hidden" data-certificate-source-panel="paste">
+                                        <label class="full-span">
+                                            粘贴证书 PEM
+                                            <textarea id="server-ssl-cert-pem" rows="5" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+                                        </label>
+                                        <label class="full-span">
+                                            粘贴私钥 PEM
+                                            <textarea id="server-ssl-key-pem" rows="5" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="inline-actions form-actions full-span">
+                                    <button class="primary-button" type="submit">保存服务设置</button>
+                                    <button class="secondary-button" type="button" data-action="restart-service">重启服务</button>
+                                </div>
+                            </form>
+                        </section>
+
+                        <section class="panel">
+                            <h3>当前状态</h3>
+                            <p class="muted-text" id="server-config-summary">加载中...</p>
+                            <dl class="info-grid">
+                                <dt>当前入口</dt>
+                                <dd id="server-config-endpoint">加载中...</dd>
+                                <dt>端口设置</dt>
+                                <dd id="server-config-ports">加载中...</dd>
+                                <dt>证书文件</dt>
+                                <dd id="server-config-certfile">加载中...</dd>
+                                <dt>私钥文件</dt>
+                                <dd id="server-config-keyfile">加载中...</dd>
+                                <dt>重启状态</dt>
+                                <dd id="server-config-restart">加载中...</dd>
+                            </dl>
+                            <p class="warning-line hidden" id="server-restart-warning"></p>
+                        </section>
+                    </div>
+                </section>
+
+                <section class="settings-panel" data-settings-panel="account">
+                    <div class="settings-layout">
+                        <section class="panel settings-form-panel">
+                            <div class="panel-heading">
+                                <h3>修改密码</h3>
+                                <span>提交前需要再次确认</span>
+                            </div>
+                            <form class="form-grid settings-form" id="password-form">
+                                <label class="full-span">
+                                    当前密码
+                                    <div class="password-field">
+                                        <input id="current-password" type="password" autocomplete="current-password" required>
+                                        <button class="secondary-button visibility-button" type="button" data-action="toggle-password-visibility" data-password-target="#current-password" aria-label="显示当前密码">显示</button>
+                                    </div>
+                                </label>
+                                <label>
+                                    新密码
+                                    <div class="password-field">
+                                        <input id="new-password" type="password" autocomplete="new-password" required minlength="6">
+                                        <button class="secondary-button visibility-button" type="button" data-action="toggle-password-visibility" data-password-target="#new-password" aria-label="显示新密码">显示</button>
+                                    </div>
+                                </label>
+                                <label>
+                                    确认新密码
+                                    <div class="password-field">
+                                        <input id="confirm-password" type="password" autocomplete="new-password" required minlength="6">
+                                        <button class="secondary-button visibility-button" type="button" data-action="toggle-password-visibility" data-password-target="#confirm-password" aria-label="显示确认密码">显示</button>
+                                    </div>
+                                </label>
+                                <p class="warning-line hidden full-span" id="password-match-warning" aria-live="polite"></p>
+                                <button class="primary-button full-span" type="submit">更新密码</button>
+                            </form>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-heading">
+                                <h3>界面外观</h3>
+                                <span id="theme-current-label">跟随系统</span>
+                            </div>
+                            <div class="segmented-control theme-control" role="radiogroup" aria-label="界面外观">
+                                <button class="segment-button" type="button" role="radio" data-theme-mode="system">跟随系统</button>
+                                <button class="segment-button" type="button" role="radio" data-theme-mode="light">浅色</button>
+                                <button class="segment-button" type="button" role="radio" data-theme-mode="dark">深色</button>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-heading">
+                                <h3>API 密钥</h3>
+                                <button class="secondary-button" type="button" data-action="refresh-api-keys">刷新</button>
+                            </div>
+                            <form class="form-grid" id="api-key-form">
+                                <label>
+                                    名称
+                                    <input id="api-key-name" type="text" placeholder="例如：Home Assistant" required>
+                                </label>
+                                <button class="primary-button" type="submit">创建密钥</button>
+                                <div class="warning-line hidden full-span" id="api-key-created"></div>
+                            </form>
+                            <div class="provider-list" id="api-key-list"></div>
+                        </section>
+
+                        <section class="panel">
+                            <h3>数据库</h3>
+                            <p class="muted-text">清空盒子、元器件、库存、标签和模板；AI 供应商、搜索源、账户和 API 密钥会保留。</p>
+                            <button class="danger-button" type="button" data-action="clear-database">清空数据库</button>
+                        </section>
+                    </div>
+                </section>
+            </section>
+        </main>
+    </div>
+
+    <nav class="mobile-nav" aria-label="移动端导航">
+        <button class="mobile-nav-button active" type="button" data-view="dashboard">首页</button>
+        <button class="mobile-nav-button" type="button" data-view="recognition">识别</button>
+        <button class="mobile-nav-button" type="button" data-view="manage">管理</button>
+        <button class="mobile-nav-button" type="button" data-view="boxes">盒子</button>
+        <button class="mobile-nav-button" type="button" data-view="search">搜索</button>
+        <button class="mobile-nav-button" type="button" data-view="settings">设置</button>
+    </nav>
+
+    <div class="modal-backdrop hidden" id="cell-editor-modal" role="dialog" aria-modal="true" aria-labelledby="cell-editor-title">
+        <section class="modal-panel">
+            <div class="panel-heading">
+                <h3 id="cell-editor-title">编辑格子</h3>
+                <button class="icon-button neutral-icon" type="button" data-action="close-cell-editor">×</button>
+            </div>
+            <form class="form-grid" id="cell-editor-form">
+                <label id="cell-position-line">
+                    位置
+                    <input id="cell-position" type="text" readonly>
+                </label>
+                <label id="cell-component-select-line">
+                    现有器件
+                    <select id="cell-component-select"></select>
+                </label>
+                <label class="full-span">
+                    AI 填充描述
+                    <textarea id="cell-ai-prompt" rows="3" placeholder="购买标题、型号、芯片丝印，或你希望 AI 重点确认的信息。"></textarea>
+                </label>
+                <label class="full-span">
+                    搜索源
+                    <select id="cell-search-provider-id"></select>
+                </label>
+                <button class="secondary-button full-span" type="button" data-action="ai-fill-cell">联网搜索并填充</button>
+                <div class="warning-line hidden full-span" id="cell-ai-warning"></div>
+                <label>
+                    名称
+                    <input id="cell-component-name" type="text" required>
+                </label>
+                <label>
+                    标签
+                    <input id="cell-component-tags" type="text" placeholder="IC, IC/电源芯片">
+                </label>
+                <div class="attribute-editor full-span">
+                    <div class="editor-label">属性</div>
+                    <div class="attribute-rows" id="cell-component-attribute-list" data-role="attribute-rows"></div>
+                    <button class="small-button" type="button" data-action="add-cell-attribute">添加属性</button>
+                </div>
+                <label class="full-span">
+                    描述
+                    <textarea id="cell-component-description" rows="2"></textarea>
+                </label>
+                <label id="cell-stock-mode-line">
+                    数量
+                    <select id="cell-stock-mode">
+                        <option value="充足">充足</option>
+                        <option value="少量">少量</option>
+                        <option value="紧张">紧张</option>
+                        <option value="用尽">用尽</option>
+                        <option value="custom">自定义数量</option>
+                    </select>
+                </label>
+                <label id="cell-exact-line" class="hidden">
+                    数量
+                    <input id="cell-quantity-exact" type="number" min="0" value="1">
+                </label>
+                <label class="full-span" id="cell-inventory-notes-line">
+                    备注
+                    <input id="cell-inventory-notes" type="text">
+                </label>
+                <div class="inline-actions full-span modal-actions">
+                    <button class="danger-button" type="button" data-action="delete-cell-inventory">删除库存</button>
+                    <button class="secondary-button" type="button" data-action="close-cell-editor">取消</button>
+                    <button class="primary-button" id="cell-editor-submit-button" type="submit">保存格子</button>
+                </div>
+            </form>
+        </section>
+    </div>
+
+    <div class="modal-backdrop hidden" id="placement-modal" role="dialog" aria-modal="true" aria-labelledby="placement-title">
+        <section class="modal-panel">
+            <div class="panel-heading">
+                <h3 id="placement-title">选择入库位置</h3>
+                <button class="icon-button neutral-icon" type="button" data-action="close-placement">×</button>
+            </div>
+            <form class="form-grid" id="placement-form">
+                <label>
+                    器件
+                    <input id="placement-component-name" type="text" readonly>
+                </label>
+                <label>
+                    数量
+                    <select id="placement-stock-mode">
+                        <option value="充足">充足</option>
+                        <option value="少量">少量</option>
+                        <option value="紧张">紧张</option>
+                        <option value="用尽">用尽</option>
+                        <option value="custom">自定义数量</option>
+                    </select>
+                </label>
+                <label id="placement-exact-line" class="hidden">
+                    数量
+                    <input id="placement-quantity-exact" type="number" min="0" value="1">
+                </label>
+                <label>
+                    备注
+                    <input id="placement-notes" type="text">
+                </label>
+                <div class="full-span placement-section">
+                    <div class="panel-heading compact-heading">
+                        <h3>AI 推荐位置</h3>
+                        <button class="secondary-button" type="button" data-action="load-placement-recommendations">推荐</button>
+                    </div>
+                    <div class="item-list compact-list" id="placement-recommendations"></div>
+                </div>
+                <label>
+                    盒子
+                    <select id="placement-box-id"></select>
+                </label>
+                <label>
+                    空位
+                    <select id="placement-sub-box-id"></select>
+                </label>
+                <label>
+                    整理箱
+                    <select id="placement-bulk-box-id"></select>
+                </label>
+                <label>
+                    新整理箱
+                    <input id="placement-new-bulk-name" type="text" placeholder="例如：工具整理箱">
+                </label>
+                <div class="inline-actions full-span modal-actions">
+                    <button class="secondary-button" type="button" data-action="create-bulk-box-for-placement">创建整理箱</button>
+                    <button class="secondary-button" type="button" data-action="close-placement">暂不入库</button>
+                    <button class="primary-button" type="submit">确认入库</button>
+                </div>
+            </form>
+        </section>
+    </div>
+
+    <div class="modal-backdrop hidden" id="box-scanner-modal" role="dialog" aria-modal="true" aria-labelledby="box-scanner-title">
+        <section class="modal-panel scanner-panel">
+            <div class="panel-heading">
+                <h3 id="box-scanner-title">扫码进入盒子</h3>
+                <button class="icon-button neutral-icon" type="button" data-action="close-box-scanner">×</button>
+            </div>
+            <div class="scanner-video-wrap">
+                <video class="scanner-video" id="box-scanner-video" playsinline muted></video>
+                <div class="scanner-frame" aria-hidden="true"></div>
+            </div>
+            <p class="warning-line hidden" id="box-scanner-status"></p>
+            <div class="form-grid">
+                <label class="full-span">
+                    盒子编号
+                    <input id="box-scanner-code" type="text" placeholder="无法调用摄像头时可手动输入 BOX-0001">
+                </label>
+                <div class="inline-actions full-span modal-actions">
+                    <button class="secondary-button" type="button" data-action="close-box-scanner">取消</button>
+                    <button class="primary-button" type="button" data-action="use-scanned-box-code">使用编号</button>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <div class="modal-backdrop hidden" id="api-key-created-modal" role="dialog" aria-modal="true" aria-labelledby="api-key-created-title">
+        <section class="modal-panel api-key-panel">
+            <div class="panel-heading">
+                <h3 id="api-key-created-title">API 密钥已创建</h3>
+                <button class="icon-button neutral-icon" type="button" data-action="close-api-key-modal">×</button>
+            </div>
+            <p class="muted-text">密钥只会显示这一次。</p>
+            <textarea id="api-key-created-value" rows="4" readonly></textarea>
+            <div class="inline-actions modal-actions">
+                <button class="secondary-button" type="button" data-action="copy-created-api-key">复制</button>
+                <button class="primary-button" type="button" data-action="close-api-key-modal">关闭</button>
+            </div>
+        </section>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/ui/app.js" defer></script>
+</body>
+</html>

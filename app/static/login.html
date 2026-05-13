@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 OhmStash</title>
+    <script>
+        (() => {
+            const theme = window.localStorage.getItem("ohmstash_theme");
+            if (theme === "dark" || theme === "light") {
+                document.documentElement.dataset.theme = theme;
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="/ui/app.css">
+</head>
+<body class="login-page">
+    <main class="login-shell">
+        <section class="panel login-card">
+            <div class="brand login-brand">
+                <div class="brand-mark">Ω</div>
+                <div>
+                    <h1>OhmStash</h1>
+                    <span>登录后继续管理库存</span>
+                </div>
+            </div>
+            <form class="form-grid" id="login-form">
+                <label class="full-span">
+                    用户名
+                    <input id="login-username" type="text" autocomplete="username" value="admin" required>
+                </label>
+                <label class="full-span">
+                    密码
+                    <input id="login-password" type="password" autocomplete="current-password" required>
+                </label>
+                <button class="primary-button full-span" id="login-submit-button" type="submit">登录</button>
+                <p class="warning-line hidden full-span" id="login-error"></p>
+            </form>
+        </section>
+    </main>
+    <script src="/ui/login.js" defer></script>
+</body>
+</html>

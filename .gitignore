@@ -1,0 +1,8 @@
+.env
+.env.docker
+.idea/
+__pycache__/
+.pytest_cache/
+uvicorn.*.log
+logs/
+certs/

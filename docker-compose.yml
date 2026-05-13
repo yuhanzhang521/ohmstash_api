@@ -1,0 +1,65 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ohmstash-db
+    env_file:
+      - .env.docker
+    volumes:
+      - ohmstash-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/yuhanzhang521/ohmstash-api:latest
+    container_name: ohmstash-api
+    env_file:
+      - .env.docker
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+      - "8443:8443"
+    volumes:
+      - ./.env.docker:/app/.env
+      - ./caddy:/app/caddy
+      - ohmstash-logs:/app/logs
+      - ohmstash-certs:/app/certs
+    restart: unless-stopped
+
+  caddy:
+    image: ghcr.io/yuhanzhang521/ohmstash-caddy:latest
+    container_name: ohmstash-caddy
+    env_file:
+      - .env.docker
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy:/etc/caddy
+      - ohmstash-caddy-data:/data
+      - ohmstash-caddy-config:/config
+    command:
+      - caddy
+      - run
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+      - --watch
+    restart: unless-stopped
+
+volumes:
+  ohmstash-postgres-data:
+  ohmstash-logs:
+  ohmstash-certs:
+  ohmstash-caddy-data:
+  ohmstash-caddy-config:

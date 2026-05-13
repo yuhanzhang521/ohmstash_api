@@ -1,0 +1,12 @@
+.git
+.idea
+.pytest_cache
+__pycache__
+*.py[cod]
+*.log
+.env
+.env.docker
+certs
+logs
+tests
+uvicorn.*.log
