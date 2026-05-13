@@ -25,7 +25,6 @@ UPLOADED_CERT_FILE = CERT_DIR / "ohmstash-ui.crt"
 UPLOADED_KEY_FILE = CERT_DIR / "ohmstash-ui.key"
 CERTIFICATE_SOURCE_MODES = {"self-signed", "path", "upload", "paste", "acme"}
 ACME_CHALLENGE_TYPES = {"http-01", "dns-01"}
-ACME_HTTP_PORT = 80
 ACME_HTTPS_PORT = 443
 SERVER_CONFIG_KEYS = (
     "SERVER_HOST",
@@ -110,8 +109,6 @@ def save_server_config(
         certfile = ""
         keyfile = ""
         https_port = ACME_HTTPS_PORT
-        if challenge_type == "http-01":
-            http_port = ACME_HTTP_PORT
     elif cert_pem or key_pem:
         certfile, keyfile = save_certificate_pair(cert_pem, key_pem)
         source = "path"

@@ -21,14 +21,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "8000:8000"
-      - "8443:8443"
+    expose:
+      - "8000"
     volumes:
       - ./.env.docker:/app/.env
       - ./caddy:/app/caddy
       - ohmstash-logs:/app/logs
-      - ohmstash-certs:/app/certs
     restart: unless-stopped
 
   caddy:
@@ -60,6 +58,5 @@ services:
 volumes:
   ohmstash-postgres-data:
   ohmstash-logs:
-  ohmstash-certs:
   ohmstash-caddy-data:
   ohmstash-caddy-config:

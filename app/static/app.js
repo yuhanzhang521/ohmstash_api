@@ -649,7 +649,7 @@ function renderServerConfig() {
     if (!serverConfig) {
         return;
     }
-    const acmeEnabled = serverConfig.certificate_source === "acme";
+    const acmeEnabled = serverConfig.https_enabled && serverConfig.certificate_source === "acme";
     const certificateStatus = acmeEnabled
         ? `ACME ${formatAcmeChallengeType(serverConfig.acme_challenge_type)}`
         : (serverConfig.using_self_signed_certificate
@@ -714,9 +714,9 @@ function formatAcmeChallengeType(challengeType) {
 function formatAcmePortStatus(serverConfig) {
     const challengeType = normalizeServerAcmeChallengeType(serverConfig.acme_challenge_type);
     if (challengeType === "http-01") {
-        return "HTTP 80 / HTTPS 443";
+        return `Caddy 80/443 -> 后端 HTTP ${serverConfig.http_port}`;
     }
-    return `后端 HTTP ${serverConfig.http_port} / HTTPS 443`;
+    return `Caddy 443 -> 后端 HTTP ${serverConfig.http_port}`;
 }
 
 function normalizeServerCertificateSource(source) {
@@ -796,16 +796,11 @@ function updateServerAcmeChallengeVisibility() {
 function applyServerAcmePortRules() {
     const enabled = q("#server-https-enabled")?.checked || false;
     const source = normalizeServerCertificateSource(state.serverCertificateSource);
-    const challengeType = normalizeServerAcmeChallengeType(state.serverAcmeChallengeType);
     const acmeActive = enabled && source === "acme";
     const httpPort = q("#server-http-port");
     const httpsPort = q("#server-https-port");
     if (httpPort) {
-        const forceHttpPort = acmeActive && challengeType === "http-01";
-        if (forceHttpPort) {
-            httpPort.value = 80;
-        }
-        httpPort.readOnly = forceHttpPort;
+        httpPort.readOnly = false;
     }
     if (httpsPort) {
         if (acmeActive) {
@@ -4645,9 +4640,6 @@ async function buildServerConfigPayload() {
             throw new Error("请填写 ACME 域名。");
         }
         payload.https_port = 443;
-        if (challengeType === "http-01") {
-            payload.http_port = 80;
-        }
         if (
             challengeType === "dns-01"
             && !payload.acme_cloudflare_api_token

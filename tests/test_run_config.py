@@ -112,7 +112,7 @@ def test_uvicorn_config_uses_http_backend_for_caddy_acme(
         HTTPS_ENABLED=True,
         HTTPS_PORT=443,
         HTTPS_CERTIFICATE_SOURCE="acme",
-        HTTP_PORT=80,
+        HTTP_PORT=8000,
     )
     monkeypatch.setattr("app.run.settings", runtime_settings)
 
@@ -121,5 +121,5 @@ def test_uvicorn_config_uses_http_backend_for_caddy_acme(
     assert config == {
         "app": "app.main:app",
         "host": "0.0.0.0",
-        "port": 80,
+        "port": 8000,
     }

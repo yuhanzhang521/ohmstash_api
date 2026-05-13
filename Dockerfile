@@ -32,7 +32,7 @@ RUN python -m pip install --no-index --find-links=/wheels -r requirements.txt \
 
 COPY app ./app
 
-EXPOSE 80 443 8000 8443
+EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -m app.healthcheck
 

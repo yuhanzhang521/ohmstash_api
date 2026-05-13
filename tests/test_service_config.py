@@ -80,7 +80,7 @@ def test_save_server_config_writes_pasted_certificate_pair(
     assert f"SSL_KEYFILE={keyfile.as_posix()}" in content
 
 
-def test_save_server_config_forces_acme_http_ports(
+def test_save_server_config_keeps_backend_http_port_for_acme(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
@@ -111,14 +111,14 @@ def test_save_server_config_forces_acme_http_ports(
     )
 
     content = env_file.read_text(encoding="utf-8")
-    assert "HTTP_PORT=80" in content
+    assert "HTTP_PORT=8000" in content
     assert "HTTPS_PORT=443" in content
     assert "HTTPS_CERTIFICATE_SOURCE=acme" in content
     assert "ACME_CHALLENGE_TYPE=http-01" in content
     assert "ACME_DOMAIN=ohmstash.example.com" in content
     assert "SSL_CERTFILE=" in content
     assert "SSL_KEYFILE=" in content
-    assert runtime_settings.HTTP_PORT == 80
+    assert runtime_settings.HTTP_PORT == 8000
     assert runtime_settings.HTTPS_PORT == 443
     assert caddy_file.read_text(encoding="utf-8") == (
         "{\n"
@@ -127,7 +127,7 @@ def test_save_server_config_forces_acme_http_ports(
         "\n"
         "ohmstash.example.com {\n"
         "    encode zstd gzip\n"
-        "    reverse_proxy http://api:80\n"
+        "    reverse_proxy http://api:8000\n"
         "}\n"
     )
 
