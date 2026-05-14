@@ -649,6 +649,13 @@ function renderServerConfig() {
     if (!serverConfig) {
         return;
     }
+    applyServerDeploymentMode(serverConfig);
+    if (serverConfig.behind_reverse_proxy) {
+        renderReverseProxyServerStatus(serverConfig);
+        q("#server-restart-warning").classList.add("hidden");
+        q("#server-restart-warning").textContent = "";
+        return;
+    }
     const acmeEnabled = serverConfig.https_enabled && serverConfig.certificate_source === "acme";
     const certificateStatus = acmeEnabled
         ? `ACME ${formatAcmeChallengeType(serverConfig.acme_challenge_type)}`
@@ -705,6 +712,36 @@ function renderServerConfig() {
     q("#server-restart-warning").textContent = serverConfig.restart_required
         ? "服务设置已保存，重启后端服务后生效。"
         : "";
+}
+
+function applyServerDeploymentMode(serverConfig) {
+    const reverseProxy = Boolean(serverConfig.behind_reverse_proxy);
+    qa("[data-server-standalone-only]").forEach((element) => {
+        element.classList.toggle("hidden", reverseProxy);
+    });
+    const saveButton = q("#server-config-save-button");
+    if (saveButton) {
+        saveButton.classList.toggle("hidden", reverseProxy);
+    }
+    const heading = q("#server-config-heading");
+    if (heading) {
+        heading.classList.toggle("hidden", reverseProxy);
+    }
+    const notice = q("#server-reverse-proxy-notice");
+    if (notice) {
+        notice.classList.toggle("hidden", !reverseProxy);
+    }
+}
+
+function renderReverseProxyServerStatus(serverConfig) {
+    const publicUrl = serverConfig.public_base_url || "由反代决定";
+    const mode = serverConfig.deployment_mode || "reverse_proxy";
+    q("#server-config-summary").textContent = `部署模式：${mode} · TLS 由外部反代终止`;
+    q("#server-config-endpoint").textContent = publicUrl;
+    q("#server-config-ports").textContent = `内部 HTTP ${serverConfig.http_port}`;
+    q("#server-config-certfile").textContent = "由反代管理";
+    q("#server-config-keyfile").textContent = "由反代管理";
+    q("#server-config-restart").textContent = "由部署侧重启容器生效";
 }
 
 function formatAcmeChallengeType(challengeType) {
@@ -4591,6 +4628,10 @@ async function saveLogSettings(event) {
 
 async function saveServerConfig(event) {
     event.preventDefault();
+    if (state.serverConfig?.behind_reverse_proxy) {
+        showToast("当前为反代部署模式，服务配置由外部反代管理");
+        return;
+    }
     const payload = await buildServerConfigPayload();
     const response = await apiRequest("/system/config", {
         method: "PUT",

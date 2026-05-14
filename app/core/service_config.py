@@ -48,6 +48,8 @@ restart_required = False
 def get_effective_ssl_files(
     target_settings: Settings,
 ) -> tuple[Optional[str], Optional[str], bool]:
+    if target_settings.behind_reverse_proxy:
+        return None, None, False
     if (
         not target_settings.HTTPS_ENABLED
         or target_settings.HTTPS_CERTIFICATE_SOURCE.lower() == "acme"
@@ -79,6 +81,11 @@ def save_server_config(
     acme_email: Optional[str] = None,
     acme_cloudflare_api_token: Optional[str] = None,
 ) -> None:
+    if settings.behind_reverse_proxy:
+        raise ValueError(
+            "Server configuration is managed by the external reverse proxy"
+            " in reverse_proxy deployment mode",
+        )
     source = normalize_certificate_source(certificate_source)
     challenge_type = normalize_acme_challenge_type(
         acme_challenge_type or settings.ACME_CHALLENGE_TYPE,
@@ -177,6 +184,8 @@ def validate_acme_config(
 
 
 def write_caddy_config(target_settings: Settings) -> None:
+    if target_settings.behind_reverse_proxy:
+        return
     config_file = resolve_caddy_config_file(target_settings)
     config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text(build_caddyfile(target_settings), encoding="utf-8")

@@ -7,6 +7,12 @@ from app.core.service_config import get_effective_ssl_files
 
 
 def build_uvicorn_config() -> dict[str, Any]:
+    if settings.behind_reverse_proxy:
+        return {
+            "app": "app.main:app",
+            "host": settings.SERVER_HOST,
+            "port": settings.HTTP_PORT,
+        }
     config: dict[str, Any] = {
         "app": "app.main:app",
         "host": settings.SERVER_HOST,

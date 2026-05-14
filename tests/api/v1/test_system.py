@@ -21,6 +21,32 @@ def test_system_config_can_be_read(client: TestClient) -> None:
     assert "using_self_signed_certificate" in content
     assert "acme_cloudflare_api_token_configured" in content
     assert "restart_required" in content
+    assert content["deployment_mode"] == settings.DEPLOYMENT_MODE
+    assert content["behind_reverse_proxy"] == settings.behind_reverse_proxy
+    assert "public_base_url" in content
+
+
+def test_system_config_rejects_updates_when_behind_reverse_proxy(
+    client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(settings, "DEPLOYMENT_MODE", "reverse_proxy")
+
+    response = client.put(
+        f"{settings.API_V1_STR}/system/config",
+        json={
+            "host": "127.0.0.1",
+            "http_port": 9000,
+            "https_enabled": True,
+            "https_port": 9443,
+            "certificate_source": "path",
+            "ssl_certfile": "/tmp/cert.pem",
+            "ssl_keyfile": "/tmp/key.pem",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "reverse proxy" in response.json()["detail"].lower()
 
 
 def test_system_config_can_be_updated(

@@ -26,29 +26,51 @@ class Settings(BaseSettings):
     ACME_CLOUDFLARE_API_TOKEN: Optional[str] = None
     CADDY_CONFIG_PATH: str = "caddy/Caddyfile"
     CADDY_BACKEND_HOST: str = "127.0.0.1"
+    DEPLOYMENT_MODE: str = "standalone"
+    PUBLIC_BASE_URL: Optional[str] = None
     POSTGRES_SERVER: Optional[str] = None
     POSTGRES_USER: Optional[str] = None
     POSTGRES_PASSWORD: Optional[str] = None
     POSTGRES_DB: Optional[str] = None
 
-    model_config = SettingsConfigDict(case_sensitive=True, env_file=".env")
+    model_config = SettingsConfigDict(
+        case_sensitive=True,
+        env_file=".env",
+        extra="ignore",
+    )
+
+    @property
+    def behind_reverse_proxy(self) -> bool:
+        return (self.DEPLOYMENT_MODE or "").strip().lower() == "reverse_proxy"
+
+    @property
+    def behind_reverse_proxy(self) -> bool:
+        return (self.DEPLOYMENT_MODE or "").strip().lower() == "reverse_proxy"
 
     @property
     def service_scheme(self) -> str:
+        if self.behind_reverse_proxy:
+            return "http"
         return "https" if self.HTTPS_ENABLED else "http"
 
     @property
     def service_port(self) -> int:
+        if self.behind_reverse_proxy:
+            return self.HTTP_PORT
         return self.HTTPS_PORT if self.HTTPS_ENABLED else self.HTTP_PORT
 
     @property
     def ssl_enabled(self) -> bool:
+        if self.behind_reverse_proxy:
+            return False
         return self.HTTPS_CERTIFICATE_SOURCE.lower() != "acme" and bool(
             self.SSL_CERTFILE and self.SSL_KEYFILE,
         )
 
     @property
     def uses_caddy_acme(self) -> bool:
+        if self.behind_reverse_proxy:
+            return False
         return self.HTTPS_ENABLED and self.HTTPS_CERTIFICATE_SOURCE.lower() == "acme"
 
     @property

@@ -45,6 +45,9 @@ def build_server_config_response() -> schemas.ServerConfig:
         acme_cloudflare_api_token_configured=bool(settings.ACME_CLOUDFLARE_API_TOKEN),
         caddy_config_path=settings.CADDY_CONFIG_PATH,
         restart_required=is_restart_required(),
+        deployment_mode=settings.DEPLOYMENT_MODE,
+        behind_reverse_proxy=settings.behind_reverse_proxy,
+        public_base_url=settings.PUBLIC_BASE_URL,
     )
 
 

@@ -18,6 +18,8 @@ services:
     container_name: ohmstash-api
     env_file:
       - .env.docker
+    environment:
+      - DEPLOYMENT_MODE=reverse_proxy
     depends_on:
       db:
         condition: service_healthy

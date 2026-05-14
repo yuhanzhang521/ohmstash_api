@@ -21,6 +21,9 @@ class ServerConfig(BaseModel):
     acme_cloudflare_api_token_configured: bool
     caddy_config_path: str
     restart_required: bool
+    deployment_mode: str
+    behind_reverse_proxy: bool
+    public_base_url: Optional[str]
 
 
 class ServerConfigUpdate(BaseModel):

@@ -26,6 +26,18 @@ def test_settings_assembles_database_url_with_unmasked_password() -> None:
     assert "***" not in str(settings.DATABASE_URL)
 
 
+def test_settings_ignore_docker_only_environment_values(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    settings = Settings(_env_file=Path(".env.docker.example"))
+
+    assert settings.POSTGRES_SERVER == "db"
+    assert settings.CADDY_BACKEND_HOST == "api"
+    assert "change-this-database-password" in str(settings.DATABASE_URL)
+
+
 def test_settings_use_https_port_when_enabled() -> None:
     settings = Settings(
         DATABASE_URL="postgresql://user:password@host/db",
@@ -112,6 +124,30 @@ def test_uvicorn_config_uses_http_backend_for_caddy_acme(
         HTTPS_ENABLED=True,
         HTTPS_PORT=443,
         HTTPS_CERTIFICATE_SOURCE="acme",
+        HTTP_PORT=8000,
+    )
+    monkeypatch.setattr("app.run.settings", runtime_settings)
+
+    config = build_uvicorn_config()
+
+    assert config == {
+        "app": "app.main:app",
+        "host": "0.0.0.0",
+        "port": 8000,
+    }
+
+
+def test_uvicorn_config_forces_http_when_behind_reverse_proxy(
+    monkeypatch: Any,
+) -> None:
+    runtime_settings = Settings(
+        DATABASE_URL="postgresql://user:password@host/db",
+        DEPLOYMENT_MODE="reverse_proxy",
+        HTTPS_ENABLED=True,
+        HTTPS_PORT=8443,
+        HTTPS_CERTIFICATE_SOURCE="acme",
+        SSL_CERTFILE="/etc/ssl/cert.pem",
+        SSL_KEYFILE="/etc/ssl/key.pem",
         HTTP_PORT=8000,
     )
     monkeypatch.setattr("app.run.settings", runtime_settings)

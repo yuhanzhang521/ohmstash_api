@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.core.config import Settings
 from app.core.service_config import build_caddyfile, save_server_config
 
@@ -184,4 +186,52 @@ def test_build_caddyfile_proxies_to_https_backend_when_not_acme() -> None:
 
     assert "reverse_proxy https://api:8443" in caddyfile
     assert "tls_insecure_skip_verify" in caddyfile
+
+
+def test_save_server_config_rejects_updates_in_reverse_proxy_mode(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    caddy_file = tmp_path / "Caddyfile"
+    runtime_settings = Settings(
+        DATABASE_URL="postgresql://user:password@host/db",
+        DEPLOYMENT_MODE="reverse_proxy",
+        CADDY_CONFIG_PATH=caddy_file.as_posix(),
+    )
+    monkeypatch.setattr("app.core.service_config.ENV_FILE", env_file)
+    monkeypatch.setattr("app.core.service_config.settings", runtime_settings)
+
+    with pytest.raises(ValueError, match="reverse proxy"):
+        save_server_config(
+            host="0.0.0.0",
+            http_port=8000,
+            https_enabled=True,
+            https_port=8443,
+            ssl_certfile=None,
+            ssl_keyfile=None,
+            ssl_cert_pem=None,
+            ssl_key_pem=None,
+        )
+
+    assert not caddy_file.exists()
+    assert not env_file.exists()
+
+
+def test_reverse_proxy_mode_disables_ssl_and_acme_properties() -> None:
+    runtime_settings = Settings(
+        DATABASE_URL="postgresql://user:password@host/db",
+        DEPLOYMENT_MODE="reverse_proxy",
+        HTTPS_ENABLED=True,
+        HTTPS_PORT=8443,
+        HTTPS_CERTIFICATE_SOURCE="acme",
+        SSL_CERTFILE="/etc/ssl/cert.pem",
+        SSL_KEYFILE="/etc/ssl/key.pem",
+    )
+
+    assert runtime_settings.behind_reverse_proxy
+    assert runtime_settings.service_scheme == "http"
+    assert runtime_settings.service_port == runtime_settings.HTTP_PORT
+    assert not runtime_settings.ssl_enabled
+    assert not runtime_settings.uses_caddy_acme
 

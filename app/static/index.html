@@ -609,27 +609,30 @@
 
                 <section class="settings-panel" data-settings-panel="server">
                     <div class="settings-layout">
-                        <section class="panel settings-form-panel">
-                            <div class="panel-heading">
+                        <section class="panel settings-form-panel" id="server-config-panel">
+                            <p class="muted-text hidden" id="server-reverse-proxy-notice">
+                                当前部署运行在外部反代（如 Caddy）之后，HTTPS、端口和证书由反代统一管理，此页面不提供修改入口。如需变更，请修改部署侧的 <code>.env.docker</code> 与 Caddy 配置后重启容器。
+                            </p>
+                            <div class="panel-heading" id="server-config-heading">
                                 <h3>服务监听</h3>
                                 <span>保存后需要重启服务</span>
                             </div>
                             <form class="form-grid settings-form" id="server-config-form">
-                                <h4 class="form-section-title full-span">基础监听</h4>
-                                <label>
+                                <h4 class="form-section-title full-span" data-server-standalone-only>基础监听</h4>
+                                <label data-server-standalone-only>
                                     监听地址
                                     <input id="server-host" type="text" required>
                                 </label>
-                                <label>
+                                <label data-server-standalone-only>
                                     HTTP 端口
                                     <input id="server-http-port" type="number" min="1" max="65535" required>
                                 </label>
-                                <label class="switch-line full-span">
+                                <label class="switch-line full-span" data-server-standalone-only>
                                     <input id="server-https-enabled" type="checkbox">
                                     启用 HTTPS
                                 </label>
 
-                                <div class="form-subsection full-span hidden" id="server-https-options">
+                                <div class="form-subsection full-span hidden" id="server-https-options" data-server-standalone-only>
                                     <div class="form-section-heading">
                                         <h4>HTTPS 配置</h4>
                                         <span>证书来源一次只选择一种</span>
@@ -716,7 +719,7 @@
                                 </div>
 
                                 <div class="inline-actions form-actions full-span">
-                                    <button class="primary-button" type="submit">保存服务设置</button>
+                                    <button class="primary-button" type="submit" id="server-config-save-button">保存服务设置</button>
                                     <button class="secondary-button" type="button" data-action="restart-service">重启服务</button>
                                 </div>
                             </form>
