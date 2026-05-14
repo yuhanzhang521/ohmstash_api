@@ -38,6 +38,18 @@ const DISPLAY_ATTRIBUTE_FALLBACK_KEYS = [
     "Inductance",
 ];
 
+const RECOGNITION_UPLOAD_OPTIMIZE_THRESHOLD_BYTES = 3 * 1024 * 1024;
+const RECOGNITION_UPLOAD_TARGET_BYTES = 3 * 1024 * 1024;
+const RECOGNITION_UPLOAD_MAX_SIDE = 2400;
+const RECOGNITION_UPLOAD_JPEG_QUALITIES = [0.88, 0.82, 0.76, 0.7];
+const RECOGNITION_UPLOAD_COMPRESSIBLE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp"]);
+const RECOGNITION_UPLOAD_COMPRESSIBLE_TYPES = new Set([
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+]);
+
 const ACTION_BUSY_TEXT = {
     "refresh-all": "刷新中...",
     "confirm-box-recognition": "入库中...",
@@ -363,6 +375,152 @@ function formatFileSize(size) {
     return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+async function prepareRecognitionUploadFile(file, statusCallback = null) {
+    const original = {
+        file,
+        filename: file.name || "recognition-image",
+        compressed: false,
+        originalSize: file.size,
+        uploadSize: file.size,
+    };
+    if (
+        !isRecognitionImageCompressible(file)
+        || file.size <= RECOGNITION_UPLOAD_OPTIMIZE_THRESHOLD_BYTES
+    ) {
+        return original;
+    }
+
+    try {
+        statusCallback?.(`正在压缩图片：${file.name || "照片"} · ${formatFileSize(file.size)}`);
+        const image = await loadImageForCompression(file);
+        const width = image.naturalWidth || image.width;
+        const height = image.naturalHeight || image.height;
+        const scale = Math.min(1, RECOGNITION_UPLOAD_MAX_SIDE / Math.max(width, height));
+        const targetWidth = Math.max(1, Math.round(width * scale));
+        const targetHeight = Math.max(1, Math.round(height * scale));
+        const blob = await compressImageToJpegBlob(image, targetWidth, targetHeight);
+        if (!blob || blob.size >= file.size) {
+            return original;
+        }
+
+        const filename = buildCompressedImageFilename(file.name || "recognition-image");
+        const uploadFile = typeof File === "function"
+            ? new File([blob], filename, {
+                type: "image/jpeg",
+                lastModified: file.lastModified || Date.now(),
+            })
+            : blob;
+        return {
+            file: uploadFile,
+            filename,
+            compressed: true,
+            originalSize: file.size,
+            uploadSize: blob.size,
+        };
+    } catch (error) {
+        statusCallback?.(
+            `图片压缩失败，正在尝试原图上传：${String(error?.message || error)}`,
+        );
+        return original;
+    }
+}
+
+function isRecognitionImageCompressible(file) {
+    const contentType = String(file.type || "").toLowerCase();
+    if (RECOGNITION_UPLOAD_COMPRESSIBLE_TYPES.has(contentType)) {
+        return true;
+    }
+    return RECOGNITION_UPLOAD_COMPRESSIBLE_EXTENSIONS.has(getFileExtension(file.name));
+}
+
+function getFileExtension(filename = "") {
+    const parts = String(filename).toLowerCase().split(".");
+    return parts.length > 1 ? parts.pop() : "";
+}
+
+function buildCompressedImageFilename(filename) {
+    const normalized = String(filename || "recognition-image");
+    const dotIndex = normalized.lastIndexOf(".");
+    const stem = dotIndex > 0 ? normalized.slice(0, dotIndex) : normalized;
+    return `${stem}-compressed.jpg`;
+}
+
+function loadImageForCompression(file) {
+    return new Promise((resolve, reject) => {
+        const objectUrl = URL.createObjectURL(file);
+        const image = new Image();
+        image.decoding = "async";
+        image.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve(image);
+        };
+        image.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            reject(
+                new Error(
+                    "浏览器无法读取这张图片，请尝试在相册中另存为 JPEG 后再上传。",
+                ),
+            );
+        };
+        image.src = objectUrl;
+    });
+}
+
+async function compressImageToJpegBlob(image, width, height) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+        throw new Error("浏览器不支持图片压缩，请换用 JPEG 小图后再上传。");
+    }
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+
+    let bestBlob = null;
+    for (const quality of RECOGNITION_UPLOAD_JPEG_QUALITIES) {
+        const blob = await canvasToBlob(canvas, "image/jpeg", quality);
+        if (!blob) {
+            continue;
+        }
+        if (blob.size <= RECOGNITION_UPLOAD_TARGET_BYTES) {
+            clearCanvas(canvas);
+            return blob;
+        }
+        if (!bestBlob || blob.size < bestBlob.size) {
+            bestBlob = blob;
+        }
+    }
+    clearCanvas(canvas);
+    return bestBlob;
+}
+
+function canvasToBlob(canvas, contentType, quality) {
+    if (typeof canvas.toBlob !== "function") {
+        return Promise.resolve(dataUrlToBlob(canvas.toDataURL(contentType, quality)));
+    }
+    return new Promise((resolve) => {
+        canvas.toBlob(resolve, contentType, quality);
+    });
+}
+
+function dataUrlToBlob(dataUrl) {
+    const [header, data] = dataUrl.split(",");
+    const contentType = header.match(/data:([^;]+)/)?.[1] || "image/jpeg";
+    const binary = window.atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], {type: contentType});
+}
+
+function clearCanvas(canvas) {
+    canvas.width = 1;
+    canvas.height = 1;
+}
+
 function setAuthToken(token) {
     state.authToken = token;
     window.localStorage.setItem("ohmstash_token", token);
@@ -396,10 +554,15 @@ async function apiRequest(path, options = {}) {
     if (state.authToken) {
         headers.Authorization = `Bearer ${state.authToken}`;
     }
-    const response = await fetch(`${API_BASE}${normalizePath(path)}`, {
-        ...options,
-        headers,
-    });
+    let response;
+    try {
+        response = await fetch(`${API_BASE}${normalizePath(path)}`, {
+            ...options,
+            headers,
+        });
+    } catch (error) {
+        throw new Error(getNetworkErrorMessage(error));
+    }
     const data = await parseResponse(response);
     if (response.status === 401) {
         clearAuthToken();
@@ -423,10 +586,15 @@ async function apiBlobRequest(path, options = {}) {
     if (state.authToken) {
         headers.Authorization = `Bearer ${state.authToken}`;
     }
-    const response = await fetch(`${API_BASE}${normalizePath(path)}`, {
-        ...options,
-        headers,
-    });
+    let response;
+    try {
+        response = await fetch(`${API_BASE}${normalizePath(path)}`, {
+            ...options,
+            headers,
+        });
+    } catch (error) {
+        throw new Error(getNetworkErrorMessage(error));
+    }
     if (response.status === 401) {
         clearAuthToken();
         showLoginModal();
@@ -437,6 +605,14 @@ async function apiBlobRequest(path, options = {}) {
         throw new Error(extractErrorMessage(fallback, response.statusText));
     }
     return response.blob();
+}
+
+function getNetworkErrorMessage(error) {
+    const message = String(error?.message || "网络请求失败");
+    if (/load failed|failed to fetch|networkerror/i.test(message)) {
+        return "网络请求失败：图片可能过大或连接中断，请重试。";
+    }
+    return message;
 }
 
 async function parseResponse(response) {
@@ -3592,8 +3768,16 @@ async function uploadRecognition(event) {
             throw new Error("请选择图片");
         }
         const mode = q("#recognition-mode").value;
+        const uploadFile = await prepareRecognitionUploadFile(file, setRecognitionStatus);
+        if (uploadFile.compressed) {
+            setRecognitionStatus(
+                `已压缩图片 ${formatFileSize(uploadFile.originalSize)} -> ${formatFileSize(uploadFile.uploadSize)}，正在上传识别...`,
+            );
+        } else {
+            setRecognitionStatus("正在上传图片并等待 VLM 识别...");
+        }
         const formData = new FormData();
-        formData.append("file", file);
+        formData.append("file", uploadFile.file, uploadFile.filename);
         formData.append("additional_prompt", q("#recognition-prompt").value);
         let path = "/ai/recognize_image";
         if (mode === "existing_box") {
@@ -3735,8 +3919,14 @@ async function recognizeTemplateLayout() {
     setTemplateRecognitionBusy(true);
     showToast("正在识别模板布局...");
     try {
+        const uploadFile = await prepareRecognitionUploadFile(file, showToast);
+        if (uploadFile.compressed) {
+            showToast(
+                `已压缩图片 ${formatFileSize(uploadFile.originalSize)} -> ${formatFileSize(uploadFile.uploadSize)}，正在识别...`,
+            );
+        }
         const formData = new FormData();
-        formData.append("file", file);
+        formData.append("file", uploadFile.file, uploadFile.filename);
         formData.append("layout_type", q("#template-recognition-layout-type").value);
         formData.append("additional_prompt", q("#template-recognition-prompt").value);
         const result = await apiFormRequest("/ai/recognize_box_layout_image", formData);

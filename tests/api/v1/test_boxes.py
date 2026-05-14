@@ -37,7 +37,7 @@ def test_delete_box_can_delete_exclusive_components(client: TestClient) -> None:
         f"{settings.API_V1_STR}/boxes/",
         json={
             "readable_id": f"BOX-DEL-{suffix}",
-            "name": "Delete Components Box",
+            "name": "Delete Box",
             "template_id": template_response.json()["id"],
         },
     )
@@ -110,7 +110,7 @@ def test_create_box_can_generate_readable_id(client: TestClient) -> None:
     response = client.post(
         f"{settings.API_V1_STR}/boxes/",
         json={
-            "name": "Generated ID Box",
+            "name": "Gen ID Box",
             "template_id": template["id"],
         },
     )

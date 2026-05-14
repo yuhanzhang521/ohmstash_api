@@ -21,6 +21,21 @@ NOTES_RULE_TEXT = (
     "看不到或不确定的，notes 留空。"
 )
 
+GRID_COUNT_RULE_TEXT = (
+    "规则网格必须按可见分隔线、格子边界和重复格子数量来数 rows 与 cols，"
+    "不要根据整盒外轮廓长宽比猜测行列数。"
+    "格子可以很扁，整盒比例约 3:4 时仍可能是 3 列 13 行。"
+    "如果看到 3 列、13 排扁格，必须返回 layout_definition={\"rows\": 13, \"cols\": 3}，"
+    "template_name 写作 3x13格，并返回 R1C1 到 R13C3 的 39 个 cells。"
+    "不要因为上下边缘、远端行或透视导致部分格子不清楚，就把 13 行简化成 10 行。"
+)
+
+GRID_CELL_COVERAGE_RULE_TEXT = (
+    "规则网格内容识别必须覆盖模板中的所有格子：按 rows x cols 返回完整 cells，"
+    "每个格子都要有对应 position_identifier；空格或看不清的格子也要返回，"
+    "并把 is_empty 设为 true。不要省略边缘行、远端行或空格。"
+)
+
 
 def build_component_recognition_prompt(
     db: Session,
@@ -33,6 +48,7 @@ def build_component_recognition_prompt(
         .order_by(Tag.name)
         .all()
     )
+
     tag_lines: List[str] = []
     for tag in tags:
         attributes = [item.attribute_name for item in tag.attribute_definitions]
@@ -94,6 +110,7 @@ def build_box_recognition_prompt(
         f"{base_prompt}\n\n"
         "这是一张完整盒子的照片。请根据下面盒子布局，把每个子格分别识别出来。\n"
         f"盒子布局 JSON：{json.dumps(layout_payload, ensure_ascii=False)}\n"
+        f"{GRID_CELL_COVERAGE_RULE_TEXT}\n"
         "请只返回一个 JSON 对象，格式必须是：\n"
         "{\n"
         '  "box_readable_id": "BOX-A01",\n'
@@ -135,6 +152,7 @@ def build_new_box_recognition_prompt(
         f"{BOX_NAME_RULE_TEXT}\n"
         "规则网格的规格文字按“列x行”理解，例如 7 行 4 列写作 4x7。\n"
         f"盒子模板 JSON：{json.dumps(layout_payload, ensure_ascii=False)}\n"
+        f"{GRID_CELL_COVERAGE_RULE_TEXT}\n"
         "请只返回一个 JSON 对象，格式必须是：\n"
         "{\n"
         '  "box_name": "电源芯片",\n'
@@ -167,6 +185,9 @@ def build_box_template_recognition_prompt(
     grid_instruction = (
         "用户预期这是规则网格。请识别行数 rows、列数 cols，"
         "并使用 R1C1 这种 position_identifier 返回每个格子的结果。"
+        f"{GRID_COUNT_RULE_TEXT}"
+        "layout_definition 中 rows 与 cols 必须和 cells 数量一致，"
+        "即 grid 模式下 cells 数量必须等于 rows * cols。"
     )
     irregular_instruction = (
         "用户预期这是不规则网格。请为每个可用格子生成稳定的 id，"
@@ -224,4 +245,3 @@ def build_box_template_recognition_prompt(
         "  ]\n"
         "}\n"
     )
-

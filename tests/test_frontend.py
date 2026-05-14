@@ -347,6 +347,37 @@ def test_frontend_assets_are_served() -> None:
     assert "application/octet-stream" in response.text
 
 
+def test_recognition_upload_helpers_target_mobile_large_images() -> None:
+    result = run_app_js_expression(
+        """
+        (() => {
+            return {
+                jpeg: isRecognitionImageCompressible({
+                    type: "image/jpeg",
+                    name: "camera.jpg",
+                }),
+                pngByExtension: isRecognitionImageCompressible({
+                    type: "",
+                    name: "template.PNG",
+                }),
+                heic: isRecognitionImageCompressible({
+                    type: "image/heic",
+                    name: "camera.heic",
+                }),
+                filename: buildCompressedImageFilename("box.photo.png"),
+                networkMessage: getNetworkErrorMessage(new Error("Load failed")),
+            };
+        })()
+        """
+    )
+
+    assert result["jpeg"] is True
+    assert result["pngByExtension"] is True
+    assert result["heic"] is False
+    assert result["filename"] == "box.photo-compressed.jpg"
+    assert "图片可能过大" in result["networkMessage"]
+
+
 def test_login_asset_is_served() -> None:
     response = client.get("/ui/login.js")
     assert response.status_code == 200

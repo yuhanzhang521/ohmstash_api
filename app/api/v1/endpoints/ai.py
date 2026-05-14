@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 VERIFICATION_CHUNK_SIZE = 6
 SEARCH_RESULTS_PER_ITEM = 5
+SINGLE_IMAGE_RECOGNITION_MAX_TOKENS = 1200
+BOX_RECOGNITION_MIN_MAX_TOKENS = 3000
+BOX_RECOGNITION_MAX_TOKENS = 10000
+BOX_RECOGNITION_TOKENS_PER_CELL = 220
+BOX_LAYOUT_RECOGNITION_MAX_TOKENS = 10000
 VERIFICATION_WARNING_PATTERNS = [
     re.compile(r"未检索到[^。；;，,\n]*(?:[。；;，,])?"),
     re.compile(r"未找到[^。；;，,\n]*(?:[。；;，,])?"),
@@ -202,6 +207,7 @@ def _recognize_image_with_config(
     content_type: str,
     content: bytes,
     prompt: str,
+    max_tokens: Optional[int] = None,
 ) -> schemas.ImageRecognitionResponse:
     data_url = vlm_client.build_image_data_url(content, content_type)
     messages = [
@@ -217,6 +223,7 @@ def _recognize_image_with_config(
         response, latency_ms = vlm_client.request_chat_completion(
             config=config,
             messages=messages,
+            max_tokens=max_tokens,
         )
     except vlm_client.VlmClientError as exc:
         raise HTTPException(
@@ -734,6 +741,29 @@ def _verification_max_tokens(item_count: int) -> int:
     return min(8000, max(1800, item_count * 520))
 
 
+def _box_recognition_max_tokens(cell_count: int) -> int:
+    return min(
+        BOX_RECOGNITION_MAX_TOKENS,
+        max(
+            BOX_RECOGNITION_MIN_MAX_TOKENS,
+            cell_count * BOX_RECOGNITION_TOKENS_PER_CELL,
+        ),
+    )
+
+
+def _count_layout_cells(layout_type: str, layout_definition: Any) -> int:
+    if layout_type == "grid" and isinstance(layout_definition, dict):
+        rows = max(int(layout_definition.get("rows") or 0), 0)
+        cols = max(int(layout_definition.get("cols") or 0), 0)
+        return rows * cols
+
+    if isinstance(layout_definition, dict):
+        cells = layout_definition.get("cells", [])
+    else:
+        cells = layout_definition
+    return len(cells) if isinstance(cells, list) else 0
+
+
 def _format_web_search_warning(errors: List[str]) -> str:
     if not errors:
         return "未检索到有效摘要，暂保留原标注"
@@ -1068,6 +1098,7 @@ def recognize_image(
         content_type=content_type,
         content=normalized_content,
         prompt=prompt,
+        max_tokens=SINGLE_IMAGE_RECOGNITION_MAX_TOKENS,
     )
 
 
@@ -1101,6 +1132,7 @@ def recognize_box_image(
         content_type=content_type,
         content=normalized_content,
         prompt=prompt,
+        max_tokens=_box_recognition_max_tokens(len(box.sub_boxes)),
     )
 
 
@@ -1137,6 +1169,9 @@ def recognize_box_template_image(
         content_type=content_type,
         content=normalized_content,
         prompt=prompt,
+        max_tokens=_box_recognition_max_tokens(
+            _count_layout_cells(template.layout_type, template.layout_definition),
+        ),
     )
 
 
@@ -1172,6 +1207,7 @@ def recognize_box_layout_image(
         content_type=content_type,
         content=normalized_content,
         prompt=prompt,
+        max_tokens=BOX_LAYOUT_RECOGNITION_MAX_TOKENS,
     )
 
 

@@ -171,6 +171,7 @@ def test_recognize_image_returns_parsed_result(
         content = messages[0]["content"]
         assert content[0]["type"] == "text"
         assert content[1]["type"] == "image_url"
+        assert kwargs["max_tokens"] == ai_endpoint.SINGLE_IMAGE_RECOGNITION_MAX_TOKENS
         return (
             {
                 "choices": [
@@ -270,7 +271,7 @@ def test_confirm_box_recognition_creates_inventory(
         f"{settings.API_V1_STR}/boxes/",
         json={
             "readable_id": "BOX-RECOG-01",
-            "name": "Recognition Box",
+            "name": "Recog Box",
             "template_id": template_id,
         },
     )
@@ -332,6 +333,8 @@ def test_recognize_box_template_image_returns_box_name(
         prompt = kwargs["messages"][0]["content"][0]["text"]
         assert "准备新建入库盒子" in prompt
         assert "4x7" in prompt
+        assert "按 rows x cols 返回完整 cells" in prompt
+        assert kwargs["max_tokens"] == 28 * ai_endpoint.BOX_RECOGNITION_TOKENS_PER_CELL
         return (
             {
                 "choices": [
@@ -396,6 +399,7 @@ def test_recognize_box_layout_image_returns_template_definition(
         assert "数字 row、数字 col" in prompt
         assert "不要只在 notes 或 label 中写" in prompt
         assert "template_name 只能按盒子结构特征命名" in prompt
+        assert kwargs["max_tokens"] == ai_endpoint.BOX_LAYOUT_RECOGNITION_MAX_TOKENS
         return (
             {
                 "choices": [
@@ -441,6 +445,62 @@ def test_recognize_box_layout_image_returns_template_definition(
     content = response.json()
     assert content["parsed_result"]["template_name"] == "不规则14格"
     assert content["parsed_result"]["layout_type"] == "irregular"
+
+
+def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
+        prompt = kwargs["messages"][0]["content"][0]["text"]
+        assert "规则网格" in prompt
+        assert "3 列 13 行" in prompt
+        assert "rows * cols" in prompt
+        assert kwargs["max_tokens"] == ai_endpoint.BOX_LAYOUT_RECOGNITION_MAX_TOKENS
+        return (
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"template_name": "3x13格", '
+                                '"layout_type": "grid", '
+                                '"layout_definition": {"rows": 13, "cols": 3}, '
+                                '"cells": [{"position_identifier": "R1C1", '
+                                '"is_empty": true}]}'
+                            )
+                        }
+                    }
+                ]
+            },
+            31,
+        )
+
+    monkeypatch.setattr(
+        vlm_client,
+        "request_chat_completion",
+        fake_request_chat_completion,
+    )
+    config_response = client.put(
+        f"{settings.API_V1_STR}/ai/vlm_config",
+        json={
+            "name": "Grid Layout Vision Model",
+            "provider": "openai-compatible",
+            "base_url": "https://example.com/v1",
+            "model_name": "vision-model",
+        },
+    )
+    assert config_response.status_code == 200
+
+    response = client.post(
+        f"{settings.API_V1_STR}/ai/recognize_box_layout_image",
+        files={"file": ("layout.jpg", b"fake-image", "image/jpeg")},
+        data={"layout_type": "grid"},
+    )
+    assert response.status_code == 200
+    content = response.json()
+    assert content["parsed_result"]["layout_definition"]["rows"] == 13
+    assert content["parsed_result"]["layout_definition"]["cols"] == 3
 
 
 def test_confirm_new_box_recognition_creates_box_and_inventory(
