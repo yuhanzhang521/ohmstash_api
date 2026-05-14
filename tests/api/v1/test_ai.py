@@ -2,10 +2,12 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
-from app import schemas
+from app import models, schemas
 from app.api.v1.endpoints import ai as ai_endpoint
 from app.core.config import settings
+from app.services.component_naming import normalize_component_names_in_parsed_result
 from app.services import recognition_prompt, vlm_client, web_search
 
 
@@ -77,6 +79,67 @@ def test_recognition_and_verification_prompts_include_name_rules(
         web_contexts=[],
     )
     assert recognition_prompt.COMPONENT_NAME_RULE_TEXT in verification_prompt
+
+
+def test_component_name_normalization_prefers_function_nouns() -> None:
+    normalized = normalize_component_names_in_parsed_result(
+        {
+            "cells": [
+                {
+                    "position_identifier": "R1C1",
+                    "is_empty": False,
+                    "name": "12V 5015",
+                    "tags": ["风扇"],
+                    "attributes": {"规格": "5015", "供电电压": "12V", "类型": "离心风扇"},
+                },
+                {
+                    "position_identifier": "R1C2",
+                    "is_empty": False,
+                    "name": "5g-1kg",
+                    "tags": ["传感器"],
+                    "attributes": {"量程": "5g-1kg", "类型": "薄膜压力传感器"},
+                },
+                {
+                    "position_identifier": "R1C3",
+                    "is_empty": False,
+                    "name": "223B 触摸开关模块",
+                    "tags": ["模块"],
+                    "attributes": {},
+                },
+            ]
+        }
+    )
+
+    assert normalized
+    names = [cell["name"] for cell in normalized["cells"]]
+    assert names == ["12V 离心风扇", "薄膜压力传感器", "触摸开关模块"]
+
+
+def test_component_name_normalization_formats_passive_and_ic_names() -> None:
+    normalized = normalize_component_names_in_parsed_result(
+        {
+            "cells": [
+                {
+                    "position_identifier": "R1C1",
+                    "is_empty": False,
+                    "name": "10k 0603 1%",
+                    "tags": ["电阻", "贴片"],
+                    "attributes": {"阻值": "10k", "封装": "0603", "精度": "1%"},
+                },
+                {
+                    "position_identifier": "R1C2",
+                    "is_empty": False,
+                    "name": "STM32 芯片",
+                    "tags": ["IC"],
+                    "attributes": {"型号": "STM32F103C8T6", "封装": "LQFP-48"},
+                },
+            ]
+        }
+    )
+
+    assert normalized
+    names = [cell["name"] for cell in normalized["cells"]]
+    assert names == ["10k 0603", "STM32F103C8T6"]
 
 
 def test_upsert_default_vlm_config_preserves_existing_api_key(
@@ -276,6 +339,140 @@ def test_recognize_image_accepts_known_image_extension_without_content_type(
     )
     assert response.status_code == 200
     assert response.json()["content_type"] == "image/jpeg"
+
+
+def test_create_recognition_session_returns_queued_session(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ai_endpoint, "_run_recognition_session", lambda **kwargs: None)
+    response = client.put(
+        f"{settings.API_V1_STR}/ai/vlm_config",
+        json={
+            "name": "Session Vision Model",
+            "provider": "openai-compatible",
+            "base_url": "https://example.com/v1",
+            "model_name": "vision-model",
+        },
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        f"{settings.API_V1_STR}/ai/recognition_sessions",
+        files={"file": ("session.png", b"fake-image", "image/png")},
+        data={"mode": "single_image", "additional_prompt": "优先使用功能名词。"},
+    )
+    assert response.status_code == 200
+    content = response.json()
+    assert content["status"] == "queued"
+    assert content["verification_status"] == "idle"
+    assert content["filename"] == "session.png"
+    assert content["additional_prompt"] == "优先使用功能名词。"
+
+    response = client.get(f"{settings.API_V1_STR}/ai/recognition_sessions")
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == content["id"]
+
+
+def test_recognition_session_background_stores_verified_result(
+    client: TestClient,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = client.put(
+        f"{settings.API_V1_STR}/ai/vlm_config",
+        json={
+            "name": "Background Session Vision Model",
+            "provider": "openai-compatible",
+            "base_url": "https://example.com/v1",
+            "model_name": "vision-model",
+        },
+    )
+    assert response.status_code == 200
+    config_id = response.json()["id"]
+
+    def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
+        messages = kwargs["messages"]
+        content = messages[0]["content"]
+        if isinstance(content, list):
+            return (
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"is_empty": false, '
+                                    '"position_identifier": "单图", '
+                                    '"name": "223B 触摸开关模块", '
+                                    '"tags": ["模块"], '
+                                    '"attributes": {"功能": "触摸开关模块"}}'
+                                )
+                            }
+                        }
+                    ]
+                },
+                11,
+            )
+        return (
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"items": [{"position_identifier": "单图", '
+                                '"is_empty": false, '
+                                '"name": "223B 触摸开关模块", '
+                                '"tags": ["模块"], '
+                                '"attributes": {"功能": "触摸开关模块"}, '
+                                '"display_attribute": "功能"}]}'
+                            )
+                        }
+                    }
+                ]
+            },
+            13,
+        )
+
+    monkeypatch.setattr(
+        vlm_client,
+        "request_chat_completion",
+        fake_request_chat_completion,
+    )
+    monkeypatch.setattr(
+        web_search,
+        "fetch_search_snippets",
+        lambda *args, **kwargs: [{"title": "触摸开关模块", "snippet": "触摸开关模块资料"}],
+    )
+
+    recognition_session = models.RecognitionSession(
+        owner_kind="user",
+        owner_id=1,
+        owner_name="admin",
+        mode="single_image",
+        status="queued",
+        verification_status="idle",
+        filename="switch.png",
+        content_type="image/png",
+        config_id=config_id,
+        additional_prompt="",
+        overwrite_existing=False,
+    )
+    db.add(recognition_session)
+    db.commit()
+    db.refresh(recognition_session)
+
+    ai_endpoint._run_recognition_session_with_db(
+        db=db,
+        session_id=recognition_session.id,
+        content=b"fake-image",
+        content_type="image/png",
+    )
+    db.refresh(recognition_session)
+
+    assert recognition_session.status == "succeeded"
+    assert recognition_session.verification_status == "succeeded"
+    assert recognition_session.result["parsed_result"]["name"] == "触摸开关模块"
+    assert recognition_session.verification_result["web_used"] is True
 
 
 def test_confirm_box_recognition_creates_inventory(

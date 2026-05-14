@@ -559,6 +559,65 @@ textarea:focus {
     margin-top: 12px;
 }
 
+.recognition-history {
+    display: grid;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.recognition-history-heading,
+.recognition-session-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.recognition-history-heading h4 {
+    margin: 0;
+    font-size: 14px;
+}
+
+.recognition-session-list {
+    display: grid;
+    gap: 8px;
+}
+
+.recognition-session-card {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--control-bg);
+    padding: 8px;
+}
+
+.recognition-session-card.active {
+    border-color: var(--accent);
+    background: var(--accent-tint);
+}
+
+.recognition-session-main {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+.recognition-session-title,
+.recognition-session-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.recognition-session-title {
+    font-weight: 700;
+    font-size: 13px;
+}
+
+.recognition-session-meta {
+    color: var(--muted);
+    font-size: 12px;
+}
+
 .image-preview {
     display: flex;
     align-items: center;

@@ -1,19 +1,34 @@
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.api import deps
+from app.database import SessionLocal
 from app.models.search_provider_config import (
     SearchProviderConfig as SearchProviderConfigModel,
 )
 from app.models.vlm_provider_config import VlmProviderConfig as VlmProviderConfigModel
+from app.services import auth
 from app.services import recognition_prompt, vlm_client, web_search
 from app.services.box_labeling import generate_next_box_readable_id
+from app.services.component_naming import (
+    normalize_component_names_in_parsed_result,
+    normalize_recognized_cell_payload,
+)
 from app.services.component_display import choose_component_display_attribute
 from app.services.image_upload import normalize_upload_image
 
@@ -27,6 +42,13 @@ BOX_RECOGNITION_MIN_MAX_TOKENS = 3000
 BOX_RECOGNITION_MAX_TOKENS = 10000
 BOX_RECOGNITION_TOKENS_PER_CELL = 220
 BOX_LAYOUT_RECOGNITION_MAX_TOKENS = 10000
+RECOGNITION_SESSION_HISTORY_LIMIT = 50
+RECOGNITION_SESSION_MODES = {
+    "single_image",
+    "existing_box",
+    "new_box",
+    "auto_template_box",
+}
 VERIFICATION_WARNING_PATTERNS = [
     re.compile(r"未检索到[^。；;，,\n]*(?:[。；;，,])?"),
     re.compile(r"未找到[^。；;，,\n]*(?:[。；;，,])?"),
@@ -236,13 +258,16 @@ def _recognize_image_with_config(
         ) from exc
 
     raw_text = vlm_client.extract_message_text(response)
+    parsed_result = normalize_component_names_in_parsed_result(
+        vlm_client.extract_json_object(raw_text),
+    )
     return schemas.ImageRecognitionResponse(
         config_id=config.id,
         filename=filename,
         content_type=content_type,
         prompt=prompt,
         raw_text=raw_text,
-        parsed_result=vlm_client.extract_json_object(raw_text),
+        parsed_result=parsed_result,
         latency_ms=latency_ms,
     )
 
@@ -720,6 +745,7 @@ def _parse_verified_items(
                 merged_data["attributes"]["型号"] = corrected_name
         merged_data["notes"] = _clean_verification_notes(merged_data.get("notes"))
         merged_data["verification_warning"] = warning
+        merged_data = normalize_recognized_cell_payload(merged_data)
         try:
             verified_items.append(schemas.RecognizedCell(**merged_data))
         except ValueError:
@@ -908,8 +934,115 @@ def _apply_context_warnings(
         if corrected_name:
             data["name"] = corrected_name
             data["attributes"]["型号"] = corrected_name
+        data = normalize_recognized_cell_payload(data)
         cleaned_items.append(schemas.RecognizedCell(**data))
     return cleaned_items
+
+
+def _verify_component_items(
+    *,
+    db: Session,
+    verify_in: schemas.ComponentVerificationRequest,
+) -> schemas.ComponentVerificationResponse:
+    config = _get_vlm_config_for_use(db=db, config_id=verify_in.config_id)
+    logger.info(
+        "Component verification started config_id=%s items=%s use_web=%s",
+        config.id,
+        len(verify_in.items),
+        verify_in.use_web,
+    )
+    web_contexts: List[Dict[str, Any]] = []
+    web_used = False
+    search_provider_config = _get_search_provider_config_for_use(
+        db=db,
+        config_id=verify_in.search_provider_config_id,
+    )
+    search_provider_settings = _build_search_provider_settings(search_provider_config)
+
+    if verify_in.use_web:
+        web_contexts, web_used = _build_web_contexts(
+            items=verify_in.items,
+            provider_settings=search_provider_settings,
+            additional_prompt=verify_in.additional_prompt,
+        )
+
+    context_by_position = {
+        context.get("position_identifier"): context
+        for context in web_contexts
+    }
+    verified_items: List[schemas.RecognizedCell] = []
+    raw_text_parts: List[str] = []
+    total_latency_ms = 0
+    item_chunks = _chunk_list(verify_in.items, VERIFICATION_CHUNK_SIZE)
+    for chunk_index, chunk_items in enumerate(item_chunks, start=1):
+        chunk_contexts = [
+            context_by_position[item.position_identifier]
+            for item in chunk_items
+            if item.position_identifier in context_by_position
+        ]
+        prompt = _build_verification_prompt(
+            items=chunk_items,
+            web_contexts=chunk_contexts,
+            additional_prompt=verify_in.additional_prompt,
+        )
+        try:
+            logger.info(
+                "Component verification VLM chunk started chunk=%s/%s items=%s contexts=%s",
+                chunk_index,
+                len(item_chunks),
+                len(chunk_items),
+                len(chunk_contexts),
+            )
+            response, latency_ms = vlm_client.request_chat_completion(
+                config=config,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=_verification_max_tokens(len(chunk_items)),
+            )
+        except vlm_client.VlmClientError as exc:
+            logger.warning(
+                "Component verification VLM chunk failed chunk=%s/%s status=%s message=%s",
+                chunk_index,
+                len(item_chunks),
+                exc.status_code,
+                exc.message,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": exc.message,
+                    "status_code": exc.status_code,
+                    "response_body": exc.response_body,
+                },
+            ) from exc
+
+        raw_text = vlm_client.extract_message_text(response)
+        raw_text_parts.append(raw_text)
+        total_latency_ms += latency_ms
+        logger.info(
+            "Component verification VLM chunk finished chunk=%s/%s latency_ms=%s",
+            chunk_index,
+            len(item_chunks),
+            latency_ms,
+        )
+        verified_items.extend(
+            _parse_verified_items(
+                raw_text=raw_text,
+                fallback_items=chunk_items,
+            )
+        )
+
+    verified_items = _apply_context_warnings(
+        items=verified_items,
+        web_contexts=web_contexts,
+    )
+    return schemas.ComponentVerificationResponse(
+        config_id=config.id,
+        verified_items=verified_items,
+        raw_text="\n".join(raw_text_parts),
+        latency_ms=total_latency_ms,
+        web_used=web_used,
+        web_contexts=web_contexts,
+    )
 
 
 @router.get("/vlm_config", response_model=schemas.VlmProviderConfig)
@@ -1060,6 +1193,452 @@ def delete_vlm_config(
     if not config:
         raise HTTPException(status_code=404, detail="VLM config not found")
     return crud.vlm_provider_config.remove(db=db, id=config_id)
+
+
+def _validate_recognition_session_request(
+    *,
+    db: Session,
+    mode: str,
+    box_id: Optional[int],
+    template_id: Optional[int],
+    layout_type: str,
+) -> None:
+    if mode not in RECOGNITION_SESSION_MODES:
+        raise HTTPException(status_code=400, detail="Unsupported recognition mode")
+    if mode == "existing_box":
+        if not box_id:
+            raise HTTPException(status_code=400, detail="Box is required")
+        if not crud.box.get(db=db, id=box_id):
+            raise HTTPException(status_code=404, detail="Box not found")
+    if mode == "new_box":
+        if not template_id:
+            raise HTTPException(status_code=400, detail="Box template is required")
+        if not crud.box_template.get(db=db, id=template_id):
+            raise HTTPException(status_code=404, detail="Box template not found")
+    if mode == "auto_template_box" and layout_type not in {"grid", "irregular"}:
+        raise HTTPException(status_code=400, detail="Unsupported layout type")
+
+
+def _get_owned_recognition_session(
+    *,
+    db: Session,
+    session_id: int,
+    principal: auth.AuthPrincipal,
+) -> models.RecognitionSession:
+    recognition_session = (
+        db.query(models.RecognitionSession)
+        .filter(
+            models.RecognitionSession.id == session_id,
+            models.RecognitionSession.owner_kind == principal.kind,
+            models.RecognitionSession.owner_id == principal.id,
+        )
+        .first()
+    )
+    if not recognition_session:
+        raise HTTPException(status_code=404, detail="Recognition session not found")
+    return recognition_session
+
+
+def _build_recognition_session_prompt(
+    *,
+    db: Session,
+    recognition_session: models.RecognitionSession,
+) -> Tuple[str, int]:
+    if recognition_session.mode == "single_image":
+        return (
+            recognition_prompt.build_component_recognition_prompt(
+                db,
+                additional_prompt=recognition_session.additional_prompt,
+            ),
+            SINGLE_IMAGE_RECOGNITION_MAX_TOKENS,
+        )
+
+    if recognition_session.mode == "existing_box":
+        box = crud.box.get(db=db, id=recognition_session.box_id)
+        if not box:
+            raise HTTPException(status_code=404, detail="Box not found")
+        return (
+            recognition_prompt.build_box_recognition_prompt(
+                db,
+                box=box,
+                additional_prompt=recognition_session.additional_prompt,
+            ),
+            _box_recognition_max_tokens(len(box.sub_boxes)),
+        )
+
+    if recognition_session.mode == "new_box":
+        template = crud.box_template.get(db=db, id=recognition_session.template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="Box template not found")
+        return (
+            recognition_prompt.build_new_box_recognition_prompt(
+                db,
+                template=template,
+                additional_prompt=recognition_session.additional_prompt,
+            ),
+            _box_recognition_max_tokens(
+                _count_layout_cells(
+                    template.layout_type,
+                    template.layout_definition,
+                ),
+            ),
+        )
+
+    return (
+        recognition_prompt.build_box_template_recognition_prompt(
+            db,
+            layout_type=recognition_session.layout_type or "grid",
+            additional_prompt=recognition_session.additional_prompt,
+        ),
+        BOX_LAYOUT_RECOGNITION_MAX_TOKENS,
+    )
+
+
+def _run_recognition_session(
+    *,
+    session_id: int,
+    content: bytes,
+    content_type: str,
+) -> None:
+    db = SessionLocal()
+    try:
+        _run_recognition_session_with_db(
+            db=db,
+            session_id=session_id,
+            content=content,
+            content_type=content_type,
+        )
+    finally:
+        db.close()
+
+
+def _run_recognition_session_with_db(
+    *,
+    db: Session,
+    session_id: int,
+    content: bytes,
+    content_type: str,
+) -> None:
+    recognition_session = (
+        db.query(models.RecognitionSession)
+        .filter(models.RecognitionSession.id == session_id)
+        .first()
+    )
+    if not recognition_session:
+        return
+
+    recognition_session.status = "running"
+    recognition_session.error_message = None
+    recognition_session.verification_error_message = None
+    db.add(recognition_session)
+    db.commit()
+
+    try:
+        config = _get_vlm_config_for_use(
+            db=db,
+            config_id=recognition_session.config_id,
+        )
+        prompt, max_tokens = _build_recognition_session_prompt(
+            db=db,
+            recognition_session=recognition_session,
+        )
+        response = _recognize_image_with_config(
+            config=config,
+            filename=recognition_session.filename,
+            content_type=content_type,
+            content=content,
+            prompt=prompt,
+            max_tokens=max_tokens,
+        )
+        result_data = response.model_dump(mode="json")
+        selected_items = _extract_default_verification_items(
+            result_data.get("parsed_result"),
+        )
+        if selected_items:
+            recognition_session.result = result_data
+            recognition_session.verification_status = "running"
+            db.add(recognition_session)
+            db.commit()
+            _apply_automatic_verification(
+                db=db,
+                recognition_session=recognition_session,
+                result_data=result_data,
+                selected_items=selected_items,
+            )
+        else:
+            recognition_session.result = result_data
+            recognition_session.verification_status = "skipped"
+
+        recognition_session.status = "succeeded"
+    except Exception as exc:
+        recognition_session.status = "failed"
+        recognition_session.error_message = _format_recognition_session_error(exc)
+        if recognition_session.verification_status == "running":
+            recognition_session.verification_status = "failed"
+    finally:
+        recognition_session.completed_at = datetime.now(timezone.utc)
+        db.add(recognition_session)
+        db.commit()
+
+
+def _apply_automatic_verification(
+    *,
+    db: Session,
+    recognition_session: models.RecognitionSession,
+    result_data: Dict[str, Any],
+    selected_items: List[schemas.RecognizedCell],
+) -> None:
+    try:
+        verification_result = _verify_component_items(
+            db=db,
+            verify_in=schemas.ComponentVerificationRequest(
+                items=selected_items,
+                config_id=recognition_session.config_id,
+                search_provider_config_id=(
+                    recognition_session.search_provider_config_id
+                ),
+                use_web=True,
+                additional_prompt=recognition_session.additional_prompt,
+            ),
+        )
+    except Exception as exc:
+        recognition_session.verification_status = "failed"
+        recognition_session.verification_error_message = (
+            _format_recognition_session_error(exc)
+        )
+        return
+
+    result_data["parsed_result"] = _merge_verified_items_into_parsed_result(
+        parsed_result=result_data.get("parsed_result"),
+        verified_items=verification_result.verified_items,
+    )
+    recognition_session.result = result_data
+    recognition_session.verification_result = verification_result.model_dump(
+        mode="json",
+    )
+    recognition_session.verification_status = "succeeded"
+    recognition_session.verification_error_message = None
+
+
+def _extract_default_verification_items(
+    parsed_result: Any,
+) -> List[schemas.RecognizedCell]:
+    if not isinstance(parsed_result, dict):
+        return []
+
+    raw_cells = parsed_result.get("cells")
+    if not isinstance(raw_cells, list):
+        raw_cells = [parsed_result]
+
+    selected_items: List[schemas.RecognizedCell] = []
+    for index, raw_cell in enumerate(raw_cells):
+        if not isinstance(raw_cell, dict):
+            continue
+        cell_data = normalize_recognized_cell_payload(dict(raw_cell))
+        cell_data.setdefault(
+            "position_identifier",
+            "单图" if len(raw_cells) == 1 else f"#{index + 1}",
+        )
+        try:
+            cell = schemas.RecognizedCell(**cell_data)
+        except ValueError:
+            continue
+        if _should_verify_recognized_cell(cell):
+            selected_items.append(cell)
+    return selected_items
+
+
+def _should_verify_recognized_cell(cell: schemas.RecognizedCell) -> bool:
+    if cell.is_empty or not cell.name:
+        return False
+
+    text = f"{cell.name} {' '.join(cell.tags or [])}".lower()
+    simple_terms = (
+        "电阻",
+        "resistor",
+        "电容",
+        "capacitor",
+        "电感",
+        "连接器",
+        "connector",
+        "螺丝",
+        "screw",
+    )
+    if any(term in text for term in simple_terms):
+        return False
+
+    rich_terms = (
+        "ic",
+        "芯片",
+        "mcu",
+        "mosfet",
+        "模块",
+        "传感器",
+        "sensor",
+        "电源芯片",
+        "运放",
+        "风扇",
+        "fan",
+        "开关",
+        "switch",
+        "继电器",
+        "电机",
+        "motor",
+    )
+    return any(term in text for term in rich_terms) or bool(
+        re.search(r"[a-z]{2,}\d{2,}", cell.name, re.IGNORECASE),
+    )
+
+
+def _merge_verified_items_into_parsed_result(
+    *,
+    parsed_result: Any,
+    verified_items: List[schemas.RecognizedCell],
+) -> Any:
+    if not isinstance(parsed_result, dict):
+        return parsed_result
+
+    verified_by_position = {
+        item.position_identifier: item.model_dump(mode="json")
+        for item in verified_items
+    }
+    merged_result = dict(parsed_result)
+    raw_cells = merged_result.get("cells")
+    if isinstance(raw_cells, list):
+        merged_cells: List[Any] = []
+        for index, raw_cell in enumerate(raw_cells):
+            if not isinstance(raw_cell, dict):
+                merged_cells.append(raw_cell)
+                continue
+            position = raw_cell.get("position_identifier") or f"#{index + 1}"
+            verified = verified_by_position.get(str(position))
+            merged_cell = {**raw_cell, **verified} if verified else dict(raw_cell)
+            merged_cells.append(normalize_recognized_cell_payload(merged_cell))
+        merged_result["cells"] = merged_cells
+        return normalize_component_names_in_parsed_result(merged_result)
+
+    verified = verified_items[0].model_dump(mode="json") if verified_items else {}
+    merged_result.update(verified)
+    return normalize_component_names_in_parsed_result(merged_result)
+
+
+def _format_recognition_session_error(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict):
+            message = detail.get("message") or str(detail)
+            status_code = detail.get("status_code")
+            return f"{message} (HTTP {status_code})" if status_code else message
+        return str(detail)
+    return str(exc)
+
+
+@router.post("/recognition_sessions", response_model=schemas.RecognitionSession)
+def create_recognition_session(
+    *,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(deps.get_db),
+    principal: auth.AuthPrincipal = Depends(deps.get_current_principal),
+    file: UploadFile = File(...),
+    mode: str = Form("existing_box"),
+    box_id: Optional[int] = Form(None),
+    template_id: Optional[int] = Form(None),
+    layout_type: str = Form("grid"),
+    config_id: Optional[int] = Form(None),
+    search_provider_config_id: Optional[int] = Form(None),
+    additional_prompt: str = Form(""),
+    overwrite_existing: bool = Form(False),
+) -> Any:
+    _validate_recognition_session_request(
+        db=db,
+        mode=mode,
+        box_id=box_id,
+        template_id=template_id,
+        layout_type=layout_type,
+    )
+    content = file.file.read()
+    try:
+        normalized_content, normalized_content_type = normalize_upload_image(
+            file,
+            content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    config = _get_vlm_config_for_use(db=db, config_id=config_id)
+    search_provider_config = _get_search_provider_config_for_use(
+        db=db,
+        config_id=search_provider_config_id,
+    )
+    recognition_session = models.RecognitionSession(
+        owner_kind=principal.kind,
+        owner_id=principal.id,
+        owner_name=principal.name,
+        mode=mode,
+        status="queued",
+        verification_status="idle",
+        filename=file.filename or "uploaded-recognition-image",
+        content_type=normalized_content_type,
+        config_id=config.id,
+        search_provider_config_id=(
+            search_provider_config.id if search_provider_config else None
+        ),
+        box_id=box_id,
+        template_id=template_id,
+        layout_type=layout_type,
+        additional_prompt=additional_prompt,
+        overwrite_existing=overwrite_existing,
+    )
+    db.add(recognition_session)
+    db.commit()
+    db.refresh(recognition_session)
+    background_tasks.add_task(
+        _run_recognition_session,
+        session_id=recognition_session.id,
+        content=normalized_content,
+        content_type=normalized_content_type,
+    )
+    return recognition_session
+
+
+@router.get("/recognition_sessions", response_model=List[schemas.RecognitionSession])
+def read_recognition_sessions(
+    *,
+    db: Session = Depends(deps.get_db),
+    principal: auth.AuthPrincipal = Depends(deps.get_current_principal),
+    skip: int = 0,
+    limit: int = RECOGNITION_SESSION_HISTORY_LIMIT,
+) -> Any:
+    safe_limit = min(max(limit, 1), RECOGNITION_SESSION_HISTORY_LIMIT)
+    safe_skip = max(skip, 0)
+    return (
+        db.query(models.RecognitionSession)
+        .filter(
+            models.RecognitionSession.owner_kind == principal.kind,
+            models.RecognitionSession.owner_id == principal.id,
+        )
+        .order_by(models.RecognitionSession.created_at.desc())
+        .offset(safe_skip)
+        .limit(safe_limit)
+        .all()
+    )
+
+
+@router.get(
+    "/recognition_sessions/{session_id}",
+    response_model=schemas.RecognitionSession,
+)
+def read_recognition_session(
+    *,
+    db: Session = Depends(deps.get_db),
+    principal: auth.AuthPrincipal = Depends(deps.get_current_principal),
+    session_id: int,
+) -> Any:
+    return _get_owned_recognition_session(
+        db=db,
+        session_id=session_id,
+        principal=principal,
+    )
 
 
 @router.get("/recognition_prompt")
@@ -1332,102 +1911,4 @@ def verify_components(
     db: Session = Depends(deps.get_db),
     verify_in: schemas.ComponentVerificationRequest,
 ) -> Any:
-    config = _get_vlm_config_for_use(db=db, config_id=verify_in.config_id)
-    logger.info(
-        "Component verification started config_id=%s items=%s use_web=%s",
-        config.id,
-        len(verify_in.items),
-        verify_in.use_web,
-    )
-    web_contexts: List[Dict[str, Any]] = []
-    web_used = False
-    search_provider_config = _get_search_provider_config_for_use(
-        db=db,
-        config_id=verify_in.search_provider_config_id,
-    )
-    search_provider_settings = _build_search_provider_settings(search_provider_config)
-
-    if verify_in.use_web:
-        web_contexts, web_used = _build_web_contexts(
-            items=verify_in.items,
-            provider_settings=search_provider_settings,
-            additional_prompt=verify_in.additional_prompt,
-        )
-
-    context_by_position = {
-        context.get("position_identifier"): context
-        for context in web_contexts
-    }
-    verified_items: List[schemas.RecognizedCell] = []
-    raw_text_parts: List[str] = []
-    total_latency_ms = 0
-    item_chunks = _chunk_list(verify_in.items, VERIFICATION_CHUNK_SIZE)
-    for chunk_index, chunk_items in enumerate(item_chunks, start=1):
-        chunk_contexts = [
-            context_by_position[item.position_identifier]
-            for item in chunk_items
-            if item.position_identifier in context_by_position
-        ]
-        prompt = _build_verification_prompt(
-            items=chunk_items,
-            web_contexts=chunk_contexts,
-            additional_prompt=verify_in.additional_prompt,
-        )
-        try:
-            logger.info(
-                "Component verification VLM chunk started chunk=%s/%s items=%s contexts=%s",
-                chunk_index,
-                len(item_chunks),
-                len(chunk_items),
-                len(chunk_contexts),
-            )
-            response, latency_ms = vlm_client.request_chat_completion(
-                config=config,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=_verification_max_tokens(len(chunk_items)),
-            )
-        except vlm_client.VlmClientError as exc:
-            logger.warning(
-                "Component verification VLM chunk failed chunk=%s/%s status=%s message=%s",
-                chunk_index,
-                len(item_chunks),
-                exc.status_code,
-                exc.message,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "message": exc.message,
-                    "status_code": exc.status_code,
-                    "response_body": exc.response_body,
-                },
-            ) from exc
-
-        raw_text = vlm_client.extract_message_text(response)
-        raw_text_parts.append(raw_text)
-        total_latency_ms += latency_ms
-        logger.info(
-            "Component verification VLM chunk finished chunk=%s/%s latency_ms=%s",
-            chunk_index,
-            len(item_chunks),
-            latency_ms,
-        )
-        verified_items.extend(
-            _parse_verified_items(
-                raw_text=raw_text,
-                fallback_items=chunk_items,
-            )
-        )
-
-    verified_items = _apply_context_warnings(
-        items=verified_items,
-        web_contexts=web_contexts,
-    )
-    return schemas.ComponentVerificationResponse(
-        config_id=config.id,
-        verified_items=verified_items,
-        raw_text="\n".join(raw_text_parts),
-        latency_ms=total_latency_ms,
-        web_used=web_used,
-        web_contexts=web_contexts,
-    )
+    return _verify_component_items(db=db, verify_in=verify_in)

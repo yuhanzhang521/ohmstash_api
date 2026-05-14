@@ -317,6 +317,7 @@ def test_frontend_index_is_served() -> None:
     assert 'data-action="toggle-password-visibility"' in response.text
     assert 'data-theme-mode="system"' in response.text
     assert "recognition-file-preview" in response.text
+    assert "recognition-session-list" in response.text
     assert "verification-search-provider-id" in response.text
     assert "cell-search-provider-id" in response.text
     assert "下载 WDFX" in response.text
@@ -342,6 +343,8 @@ def test_frontend_assets_are_served() -> None:
     assert "apiFormRequest" in response.text
     assert "renderRecognitionCards" in response.text
     assert "verifySelectedComponents" in response.text
+    assert "/ai/recognition_sessions" in response.text
+    assert "openRecognitionSession" in response.text
     assert "recognizeTemplateLayout" in response.text
     assert "createComponentSummaryHtml" in response.text
     assert "runAiSearch" in response.text
@@ -549,39 +552,12 @@ def test_recognition_draft_restores_until_explicitly_cleared() -> None:
     assert result["draftExistsAfterClear"] is False
 
 
-def test_pending_ai_requests_warn_before_page_unload() -> None:
-    result = run_app_js_expression(
-        """
-        (() => {
-            const event = {
-                prevented: false,
-                returnValue: "",
-                preventDefault() {
-                    this.prevented = true;
-                },
-            };
-            startLongRunningAiRequest();
-            const warning = warnBeforeUnloadDuringAi(event);
-            finishLongRunningAiRequest();
-            const idleWarning = warnBeforeUnloadDuringAi({
-                preventDefault() {
-                    throw new Error("should not warn when idle");
-                },
-            });
-            return {
-                prevented: event.prevented,
-                returnValue: event.returnValue,
-                warning,
-                idleWarning: idleWarning ?? null,
-            };
-        })()
-        """
-    )
-
-    assert result["prevented"] is True
-    assert "AI 正在处理" in result["returnValue"]
-    assert result["warning"] == result["returnValue"]
-    assert result["idleWarning"] is None
+def test_recognition_uses_sessions_instead_of_unload_warning() -> None:
+    response = client.get("/ui/app.js")
+    assert response.status_code == 200
+    assert "beforeunload" not in response.text
+    assert "warnBeforeUnloadDuringAi" not in response.text
+    assert "RECOGNITION_ACTIVE_SESSION_STORAGE_KEY" in response.text
 
 
 def test_login_asset_is_served() -> None:

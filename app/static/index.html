@@ -155,6 +155,15 @@
                             </label>
                             <button class="primary-button" id="recognition-submit-button" type="submit">上传识别</button>
                         </form>
+                        <div class="recognition-history">
+                            <div class="recognition-history-heading">
+                                <h4>识别历史</h4>
+                                <button class="secondary-button" type="button" data-action="refresh-recognition-sessions">刷新</button>
+                            </div>
+                            <div class="recognition-session-list" id="recognition-session-list">
+                                <div class="empty-panel compact-empty">暂无识别会话。</div>
+                            </div>
+                        </div>
                         <div class="inline-actions recognition-actions">
                             <button class="primary-button" type="button" data-action="confirm-box-recognition">确认入库</button>
                         </div>

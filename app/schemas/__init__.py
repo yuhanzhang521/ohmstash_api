@@ -26,6 +26,7 @@ from .ai import (
     ConfirmBoxRecognitionResult,
     ConfirmNewBoxRecognitionRequest,
     ImageRecognitionResponse,
+    RecognitionSession,
     RecognizedCell,
     VlmConnectionTestRequest,
     VlmConnectionTestResult,

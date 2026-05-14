@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.box import _validate_box_name
 from app.schemas.box_template import LayoutDefinition, LayoutType
@@ -105,3 +106,31 @@ class ComponentVerificationResponse(BaseModel):
     latency_ms: int
     web_used: bool = False
     web_contexts: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class RecognitionSession(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    owner_kind: str
+    owner_id: int
+    owner_name: str
+    mode: str
+    status: str
+    verification_status: str
+    filename: str
+    content_type: str
+    config_id: Optional[int] = None
+    search_provider_config_id: Optional[int] = None
+    box_id: Optional[int] = None
+    template_id: Optional[int] = None
+    layout_type: Optional[str] = None
+    additional_prompt: str = ""
+    overwrite_existing: bool = False
+    result: Optional[Dict[str, Any]] = None
+    verification_result: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    verification_error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None

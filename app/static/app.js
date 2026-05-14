@@ -1,8 +1,8 @@
 const API_BASE = "/api/v1";
 const THEME_STORAGE_KEY = "ohmstash_theme";
 const RECOGNITION_DRAFT_STORAGE_KEY = "ohmstash_recognition_draft";
+const RECOGNITION_ACTIVE_SESSION_STORAGE_KEY = "ohmstash_active_recognition_session";
 const RECOGNITION_DRAFT_VERSION = 1;
-const AI_PENDING_UNLOAD_MESSAGE = "AI 正在处理，请保持页面打开；离开页面会丢失本次未返回的结果。";
 const THEME_LABELS = {
     system: "跟随系统",
     light: "浅色",
@@ -55,11 +55,14 @@ const RECOGNITION_UPLOAD_COMPRESSIBLE_TYPES = new Set([
 const RECOGNITION_NETWORK_RETRY_COUNT = 2;
 const RECOGNITION_NETWORK_RETRY_DELAYS_MS = [1200, 3000];
 const RECOGNITION_WAKE_LOCK_TYPE = "screen";
+const RECOGNITION_SESSION_POLL_INTERVAL_MS = 3000;
 
 const ACTION_BUSY_TEXT = {
     "refresh-all": "刷新中...",
     "confirm-box-recognition": "入库中...",
     "verify-selected-components": "搜索中...",
+    "refresh-recognition-sessions": "刷新中...",
+    "open-recognition-session": "加载中...",
     "recognize-template-layout": "识别中...",
     "delete-component": "删除中...",
     "delete-template": "删除中...",
@@ -148,7 +151,10 @@ const state = {
     recognizedTemplate: null,
     matchedTemplateId: null,
     lastRecognition: null,
-    longRunningAiRequestCount: 0,
+    recognitionSessions: [],
+    activeRecognitionSessionId: readActiveRecognitionSessionId(),
+    loadedRecognitionSessionId: null,
+    recognitionSessionPollTimer: null,
     previewUrls: {},
     templateNameAuto: true,
     manageMode: "boxes",
@@ -733,21 +739,17 @@ function removeLocalStorageItem(key) {
     }
 }
 
-function startLongRunningAiRequest() {
-    state.longRunningAiRequestCount += 1;
+function readActiveRecognitionSessionId() {
+    const value = Number(window.localStorage.getItem(RECOGNITION_ACTIVE_SESSION_STORAGE_KEY) || 0);
+    return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function finishLongRunningAiRequest() {
-    state.longRunningAiRequestCount = Math.max(state.longRunningAiRequestCount - 1, 0);
-}
-
-function warnBeforeUnloadDuringAi(event) {
-    if (state.longRunningAiRequestCount <= 0) {
-        return undefined;
+function writeActiveRecognitionSessionId(sessionId) {
+    if (!sessionId) {
+        removeLocalStorageItem(RECOGNITION_ACTIVE_SESSION_STORAGE_KEY);
+        return;
     }
-    event.preventDefault();
-    event.returnValue = AI_PENDING_UNLOAD_MESSAGE;
-    return AI_PENDING_UNLOAD_MESSAGE;
+    window.localStorage.setItem(RECOGNITION_ACTIVE_SESSION_STORAGE_KEY, String(sessionId));
 }
 
 async function parseResponse(response) {
@@ -835,6 +837,9 @@ function setView(view) {
     if (view === "manage") {
         renderManageView();
     }
+    if (view === "recognition" && state.authToken) {
+        refreshRecognitionSessions().catch((error) => showToast(error.message));
+    }
 }
 
 function setSettingsView(view) {
@@ -895,6 +900,7 @@ async function refreshAll() {
         await Promise.all([
             refreshAi(),
             refreshSearchProviders(),
+            refreshRecognitionSessions(),
             refreshParts(),
             refreshStorage(),
             refreshServerConfig(),
@@ -923,6 +929,24 @@ async function refreshSearchProviders() {
     state.searchProviderConfigs = await apiRequest("/search/providers/");
     renderSearchProviderConfigs();
     renderSearchProviderSelectors();
+}
+
+async function refreshRecognitionSessions() {
+    state.recognitionSessions = await apiRequest("/ai/recognition_sessions?limit=30");
+    renderRecognitionSessionList();
+    return state.recognitionSessions;
+}
+
+function upsertRecognitionSession(session) {
+    const index = state.recognitionSessions.findIndex((item) => item.id === session.id);
+    if (index >= 0) {
+        state.recognitionSessions[index] = session;
+    } else {
+        state.recognitionSessions.unshift(session);
+    }
+    state.recognitionSessions.sort((left, right) => {
+        return new Date(right.created_at || 0) - new Date(left.created_at || 0);
+    });
 }
 
 async function refreshParts() {
@@ -2311,6 +2335,189 @@ function setRecognitionStatus(message, isError = false) {
     viewer.innerHTML = `<div class="empty-panel ${isError ? "error" : ""}">${escapeHtml(message)}</div>`;
 }
 
+function renderRecognitionSessionList() {
+    const list = q("#recognition-session-list");
+    if (!list) {
+        return;
+    }
+    if (!state.recognitionSessions.length) {
+        list.innerHTML = '<div class="empty-panel compact-empty">暂无识别会话。</div>';
+        return;
+    }
+    list.innerHTML = state.recognitionSessions.map((session) => {
+        const active = session.id === state.activeRecognitionSessionId ? " active" : "";
+        const title = [
+            getRecognitionSessionModeLabel(session.mode),
+            session.filename || `会话 #${session.id}`,
+        ].filter(Boolean).join(" · ");
+        const meta = [
+            formatRecognitionSessionTime(session.created_at),
+            getRecognitionSessionStatusLabel(session),
+            getRecognitionSessionVerificationLabel(session),
+        ].filter(Boolean).join(" · ");
+        return `
+            <article class="recognition-session-card${active}">
+                <div class="recognition-session-main">
+                    <div class="recognition-session-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+                    <div class="recognition-session-meta">${escapeHtml(meta)}</div>
+                </div>
+                <button class="small-button" type="button" data-action="open-recognition-session" data-id="${session.id}">打开</button>
+            </article>
+        `;
+    }).join("");
+}
+
+function getRecognitionSessionModeLabel(mode) {
+    return {
+        single_image: "单图识别",
+        existing_box: "更新已有盒子",
+        new_box: "按模板新建盒子",
+        auto_template_box: "识别样式",
+    }[mode] || "识别";
+}
+
+function getRecognitionSessionStatusLabel(session) {
+    return {
+        queued: "排队中",
+        running: "识别中",
+        succeeded: "已完成",
+        failed: "失败",
+    }[session.status] || session.status;
+}
+
+function getRecognitionSessionVerificationLabel(session) {
+    return {
+        idle: "",
+        running: "自动搜索中",
+        succeeded: "已自动搜索",
+        failed: "自动搜索失败",
+        skipped: "无需自动搜索",
+    }[session.verification_status] || "";
+}
+
+function formatRecognitionSessionTime(value) {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) {
+        return "";
+    }
+    return date.toLocaleString();
+}
+
+function isRecognitionSessionFinished(session) {
+    return ["succeeded", "failed"].includes(session.status);
+}
+
+function setActiveRecognitionSessionId(sessionId) {
+    state.activeRecognitionSessionId = sessionId || null;
+    writeActiveRecognitionSessionId(state.activeRecognitionSessionId);
+    renderRecognitionSessionList();
+}
+
+async function openRecognitionSession(sessionId) {
+    const session = await apiRequest(`/ai/recognition_sessions/${sessionId}`);
+    activateRecognitionSession(session, {fromHistory: true});
+}
+
+function activateRecognitionSession(session, options = {}) {
+    upsertRecognitionSession(session);
+    setActiveRecognitionSessionId(session.id);
+    applyRecognitionSessionContext(session);
+    if (session.result?.parsed_result) {
+        loadRecognitionSessionResult(session, options);
+    } else if (session.status === "failed") {
+        setRecognitionStatus(session.error_message || "识别会话失败。", true);
+    } else {
+        setRecognitionStatus(getRecognitionSessionWaitingMessage(session));
+    }
+    if (isRecognitionSessionFinished(session)) {
+        stopRecognitionSessionPolling();
+    } else {
+        startRecognitionSessionPolling(session.id);
+    }
+}
+
+function getRecognitionSessionWaitingMessage(session) {
+    if (session.verification_status === "running") {
+        return "识别已完成，正在自动联网搜索默认选中的器件...";
+    }
+    return "后台识别会话已创建，结果会写入识别历史。";
+}
+
+function applyRecognitionSessionContext(session) {
+    const mode = normalizeRecognitionDraftMode(session.mode);
+    q("#recognition-mode").value = mode;
+    state.recognitionMode = mode;
+    setDraftFieldValue("#recognition-box-id", session.box_id || "");
+    setDraftFieldValue("#recognition-template-id", session.template_id || "");
+    setDraftFieldValue("#recognition-layout-type", session.layout_type || "grid");
+    setDraftFieldValue("#recognition-prompt", session.additional_prompt || "");
+    setDraftFieldValue(
+        "#verification-search-provider-id",
+        session.search_provider_config_id || "",
+    );
+    if (q("#recognition-overwrite-existing")) {
+        q("#recognition-overwrite-existing").checked = Boolean(session.overwrite_existing);
+    }
+    updateRecognitionModeFields();
+}
+
+function loadRecognitionSessionResult(session, options = {}) {
+    const shouldRender = state.loadedRecognitionSessionId !== session.id
+        || options.fromHistory
+        || session.verification_status === "succeeded";
+    if (!shouldRender) {
+        return;
+    }
+    renderRecognitionResult(session.result);
+    state.loadedRecognitionSessionId = session.id;
+    const autoSearchText = getRecognitionSessionVerificationLabel(session);
+    if (options.fromHistory && autoSearchText) {
+        showToast(`已打开识别会话，${autoSearchText}`);
+    }
+}
+
+function startRecognitionSessionPolling(sessionId) {
+    stopRecognitionSessionPolling();
+    state.recognitionSessionPollTimer = window.setInterval(async () => {
+        try {
+            const session = await apiRequest(`/ai/recognition_sessions/${sessionId}`);
+            activateRecognitionSession(session);
+            if (isRecognitionSessionFinished(session)) {
+                await refreshRecognitionSessions();
+                if (session.status === "succeeded") {
+                    showToast("识别会话已完成");
+                }
+            }
+        } catch (error) {
+            stopRecognitionSessionPolling();
+            showToast(error.message);
+        }
+    }, RECOGNITION_SESSION_POLL_INTERVAL_MS);
+}
+
+function stopRecognitionSessionPolling() {
+    if (!state.recognitionSessionPollTimer) {
+        return;
+    }
+    window.clearInterval(state.recognitionSessionPollTimer);
+    state.recognitionSessionPollTimer = null;
+}
+
+function restoreActiveRecognitionSession() {
+    if (!state.activeRecognitionSessionId) {
+        return false;
+    }
+    const session = state.recognitionSessions.find((item) => {
+        return item.id === state.activeRecognitionSessionId;
+    });
+    if (!session) {
+        setActiveRecognitionSessionId(null);
+        return false;
+    }
+    activateRecognitionSession(session);
+    return true;
+}
+
 function resetRecognitionResultState() {
     state.recognitionCells = [];
     state.recognitionEditing = false;
@@ -3068,7 +3275,24 @@ function shouldVerifyCell(cell) {
     if (simpleTerms.some((term) => text.includes(term))) {
         return false;
     }
-    const richTerms = ["ic", "芯片", "mcu", "mosfet", "模块", "传感器", "sensor", "电源芯片", "运放"];
+    const richTerms = [
+        "ic",
+        "芯片",
+        "mcu",
+        "mosfet",
+        "模块",
+        "传感器",
+        "sensor",
+        "电源芯片",
+        "运放",
+        "风扇",
+        "fan",
+        "开关",
+        "switch",
+        "继电器",
+        "电机",
+        "motor",
+    ];
     return richTerms.some((term) => text.includes(term)) || /[a-z]{2,}\d{2,}/i.test(cell.name);
 }
 
@@ -3711,7 +3935,6 @@ async function showBoxMap(boxId) {
 
 function bindEvents() {
     document.addEventListener("click", handleActionClick);
-    window.addEventListener("beforeunload", warnBeforeUnloadDuringAi);
     qa("[data-view]").forEach((button) => {
         button.addEventListener("click", () => setView(button.dataset.view));
     });
@@ -3891,6 +4114,12 @@ async function handleActionClick(event) {
         }
         if (action === "verify-selected-components") {
             await verifySelectedComponents();
+        }
+        if (action === "refresh-recognition-sessions") {
+            await refreshRecognitionSessions();
+        }
+        if (action === "open-recognition-session") {
+            await openRecognitionSession(Number(id));
         }
         if (action === "toggle-recognition-verification") {
             toggleRecognitionVerification();
@@ -4157,11 +4386,8 @@ async function deleteBoxWithOptions(boxId) {
 async function uploadRecognition(event) {
     event.preventDefault();
     setRecognitionBusy(true);
-    setRecognitionStatus("正在上传图片并等待 VLM 识别...");
-    let wakeLock = null;
-    startLongRunningAiRequest();
+    setRecognitionStatus("正在上传图片并创建后台识别会话...");
     try {
-        wakeLock = await requestRecognitionWakeLock();
         const file = q("#recognition-file").files[0];
         if (!file) {
             throw new Error("请选择图片");
@@ -4170,22 +4396,26 @@ async function uploadRecognition(event) {
         const uploadFile = await prepareRecognitionUploadFile(file, setRecognitionStatus);
         if (uploadFile.compressed) {
             setRecognitionStatus(
-                `已压缩图片 ${formatFileSize(uploadFile.originalSize)} -> ${formatFileSize(uploadFile.uploadSize)}，正在上传识别...`,
+                `已压缩图片 ${formatFileSize(uploadFile.originalSize)} -> ${formatFileSize(uploadFile.uploadSize)}，正在创建后台会话...`,
             );
         } else {
-            setRecognitionStatus("正在上传图片并等待 VLM 识别...");
+            setRecognitionStatus("正在上传图片并创建后台识别会话...");
         }
         const formData = new FormData();
         formData.append("file", uploadFile.file, uploadFile.filename);
+        formData.append("mode", mode);
         formData.append("additional_prompt", q("#recognition-prompt").value);
-        let path = "/ai/recognize_image";
+        const searchProviderConfigId = getSelectedSearchProviderConfigId();
+        if (searchProviderConfigId) {
+            formData.append("search_provider_config_id", String(searchProviderConfigId));
+        }
         if (mode === "existing_box") {
             const boxId = q("#recognition-box-id").value;
             if (!boxId) {
                 throw new Error("请先选择盒子");
             }
             formData.append("box_id", boxId);
-            path = "/ai/recognize_box_image";
+            formData.append("overwrite_existing", q("#recognition-overwrite-existing").checked ? "true" : "false");
         }
         if (mode === "new_box") {
             const templateId = q("#recognition-template-id").value;
@@ -4193,27 +4423,24 @@ async function uploadRecognition(event) {
                 throw new Error("请先选择盒子模板");
             }
             formData.append("template_id", templateId);
-            path = "/ai/recognize_box_template_image";
         }
         if (mode === "auto_template_box") {
             formData.append("layout_type", q("#recognition-layout-type").value);
-            path = "/ai/recognize_box_layout_image";
         }
         clearRecognitionDraft();
         resetRecognitionResultState();
-        const result = await apiFormRequest(
-            path,
+        const session = await apiFormRequest(
+            "/ai/recognition_sessions",
             formData,
             buildRecognitionNetworkRetryOptions(setRecognitionStatus),
         );
-        renderRecognitionResult(result);
-        showToast("识别完成");
+        activateRecognitionSession(session);
+        await refreshRecognitionSessions();
+        showToast("识别会话已创建，可稍后从历史记录打开");
     } catch (error) {
         setRecognitionStatus(error.message, true);
         showToast(error.message);
     } finally {
-        releaseRecognitionWakeLock(wakeLock);
-        finishLongRunningAiRequest();
         setRecognitionBusy(false);
     }
 }
@@ -4279,6 +4506,8 @@ async function confirmBoxRecognition() {
         showBoxLabel(result.box_id);
     }
     discardRecognitionResult("本次识别结果已入库。重新上传图片后会生成新的识别结果。");
+    setActiveRecognitionSessionId(null);
+    state.loadedRecognitionSessionId = null;
     showToast(`已入库：${result.created_inventory_items} 条库存`);
 }
 
@@ -4289,21 +4518,15 @@ async function verifySelectedComponents() {
         throw new Error("请先勾选需要联网搜索的器件");
     }
     showToast(`正在联网搜索 ${selectedCells.length} 个器件并让 AI 核对属性...`);
-    startLongRunningAiRequest();
-    let result;
-    try {
-        result = await apiRequest("/ai/verify_components", {
-            method: "POST",
-            body: JSON.stringify({
-                items: selectedCells,
-                use_web: true,
-                search_provider_config_id: getSelectedSearchProviderConfigId(),
-                additional_prompt: q("#recognition-prompt").value.trim(),
-            }),
-        });
-    } finally {
-        finishLongRunningAiRequest();
-    }
+    const result = await apiRequest("/ai/verify_components", {
+        method: "POST",
+        body: JSON.stringify({
+            items: selectedCells,
+            use_web: true,
+            search_provider_config_id: getSelectedSearchProviderConfigId(),
+            additional_prompt: q("#recognition-prompt").value.trim(),
+        }),
+    });
     const verifiedByPosition = new Map(
         result.verified_items.map((cell, index) => [
             cell.position_identifier || selectedCells[index]?.position_identifier,
@@ -4334,7 +4557,6 @@ async function recognizeTemplateLayout() {
     setTemplateRecognitionBusy(true);
     showToast("正在识别模板布局...");
     let wakeLock = null;
-    startLongRunningAiRequest();
     try {
         wakeLock = await requestRecognitionWakeLock();
         const uploadFile = await prepareRecognitionUploadFile(file, showToast);
@@ -4362,7 +4584,6 @@ async function recognizeTemplateLayout() {
         showToast("模板识别结果已填入表单");
     } finally {
         releaseRecognitionWakeLock(wakeLock);
-        finishLongRunningAiRequest();
         setTemplateRecognitionBusy(false);
     }
 }
@@ -4707,20 +4928,14 @@ async function loadPlacementRecommendations() {
     if (!component) {
         throw new Error("请先选择要入库的器件");
     }
-    startLongRunningAiRequest();
-    let result;
-    try {
-        result = await apiRequest("/search/recommend_locations", {
-            method: "POST",
-            body: JSON.stringify({
-                text: [component.name, component.description || ""].join(" ").trim(),
-                tag_names: getComponentTagNames(component),
-                limit: 8,
-            }),
-        });
-    } finally {
-        finishLongRunningAiRequest();
-    }
+    const result = await apiRequest("/search/recommend_locations", {
+        method: "POST",
+        body: JSON.stringify({
+            text: [component.name, component.description || ""].join(" ").trim(),
+            tag_names: getComponentTagNames(component),
+            limit: 8,
+        }),
+    });
     const list = q("#placement-recommendations");
     list.innerHTML = "";
     if (!result.recommendations.length) {
@@ -5007,32 +5222,26 @@ async function aiFillCell() {
         throw new Error("请输入描述或名称");
     }
     showToast("正在联网搜索并填充信息...");
-    startLongRunningAiRequest();
-    let response;
-    try {
-        response = await apiRequest("/ai/verify_components", {
-            method: "POST",
-            body: JSON.stringify({
-                items: [
-                    {
-                        position_identifier: q("#cell-position").value,
-                        is_empty: false,
-                        name,
-                        tags: parseList(q("#cell-component-tags").value),
-                        attributes: collectAttributeRows(q("#cell-component-attribute-list")),
-                        notes: q("#cell-component-description").value.trim() || prompt,
-                        stock_mode: "fuzzy",
-                        quantity_fuzzy: "未知",
-                    },
-                ],
-                use_web: true,
-                search_provider_config_id: getSelectedSearchProviderConfigId(),
-                additional_prompt: prompt,
-            }),
-        });
-    } finally {
-        finishLongRunningAiRequest();
-    }
+    const response = await apiRequest("/ai/verify_components", {
+        method: "POST",
+        body: JSON.stringify({
+            items: [
+                {
+                    position_identifier: q("#cell-position").value,
+                    is_empty: false,
+                    name,
+                    tags: parseList(q("#cell-component-tags").value),
+                    attributes: collectAttributeRows(q("#cell-component-attribute-list")),
+                    notes: q("#cell-component-description").value.trim() || prompt,
+                    stock_mode: "fuzzy",
+                    quantity_fuzzy: "未知",
+                },
+            ],
+            use_web: true,
+            search_provider_config_id: getSelectedSearchProviderConfigId(),
+            additional_prompt: prompt,
+        }),
+    });
     const item = response.verified_items[0];
     if (!item) {
         throw new Error("AI 没有返回可填充信息");
@@ -5176,16 +5385,10 @@ async function runAiSearchQuery(query) {
     if (!query) {
         throw new Error("请输入自然语言需求");
     }
-    startLongRunningAiRequest();
-    let response;
-    try {
-        response = await apiRequest("/search/semantic", {
-            method: "POST",
-            body: JSON.stringify({query, use_llm: true, limit: 20}),
-        });
-    } finally {
-        finishLongRunningAiRequest();
-    }
+    const response = await apiRequest("/search/semantic", {
+        method: "POST",
+        body: JSON.stringify({query, use_llm: true, limit: 20}),
+    });
     renderAiSearchSummary(response);
     renderSearchResults(response.results, "AI 没有在已有库存中找到合适器件。");
     showToast(response.parsed_query.llm_used ? "AI 搜索完成" : "已使用关键字兜底搜索");
@@ -5223,20 +5426,14 @@ function renderAiSearchSummary(response) {
 
 async function runRecommendation(event) {
     event.preventDefault();
-    startLongRunningAiRequest();
-    let result;
-    try {
-        result = await apiRequest("/search/recommend_locations", {
-            method: "POST",
-            body: JSON.stringify({
-                text: q("#recommendation-text").value.trim() || null,
-                tag_names: parseList(q("#recommendation-tags").value),
-                preferred_box_id: q("#recommendation-box-id").value ? Number(q("#recommendation-box-id").value) : null,
-            }),
-        });
-    } finally {
-        finishLongRunningAiRequest();
-    }
+    const result = await apiRequest("/search/recommend_locations", {
+        method: "POST",
+        body: JSON.stringify({
+            text: q("#recommendation-text").value.trim() || null,
+            tag_names: parseList(q("#recommendation-tags").value),
+            preferred_box_id: q("#recommendation-box-id").value ? Number(q("#recommendation-box-id").value) : null,
+        }),
+    });
     const list = q("#recommendation-list");
     list.innerHTML = "";
     if (!result.recommendations.length) {
@@ -5605,7 +5802,9 @@ async function boot() {
     try {
         await refreshCurrentUser();
         await refreshAll();
-        restoreRecognitionDraft();
+        if (!restoreActiveRecognitionSession()) {
+            restoreRecognitionDraft();
+        }
         hideLoginModal();
     } catch (error) {
         clearAuthToken();

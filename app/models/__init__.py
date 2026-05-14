@@ -5,6 +5,7 @@ from .box import Box
 from .box_template import BoxTemplate
 from .component import Component
 from .inventory import Inventory
+from .recognition_session import RecognitionSession
 from .search_provider_config import SearchProviderConfig
 from .tag import Tag
 from .sub_box import SubBox
