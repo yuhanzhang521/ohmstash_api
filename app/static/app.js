@@ -49,6 +49,9 @@ const RECOGNITION_UPLOAD_COMPRESSIBLE_TYPES = new Set([
     "image/png",
     "image/webp",
 ]);
+const RECOGNITION_NETWORK_RETRY_COUNT = 2;
+const RECOGNITION_NETWORK_RETRY_DELAYS_MS = [1200, 3000];
+const RECOGNITION_WAKE_LOCK_TYPE = "screen";
 
 const ACTION_BUSY_TEXT = {
     "refresh-all": "刷新中...",
@@ -547,8 +550,9 @@ function normalizePath(path) {
     return path.startsWith("/") ? path : `/${path}`;
 }
 
-async function apiRequest(path, options = {}) {
-    const headers = options.body instanceof FormData
+async function apiRequest(path, options = {}, requestOptions = {}) {
+    const isFormDataBody = typeof FormData !== "undefined" && options.body instanceof FormData;
+    const headers = isFormDataBody
         ? options.headers || {}
         : {"Content-Type": "application/json", ...(options.headers || {})};
     if (state.authToken) {
@@ -556,10 +560,14 @@ async function apiRequest(path, options = {}) {
     }
     let response;
     try {
-        response = await fetch(`${API_BASE}${normalizePath(path)}`, {
-            ...options,
-            headers,
-        });
+        response = await fetchWithNetworkRetry(
+            `${API_BASE}${normalizePath(path)}`,
+            {
+                ...options,
+                headers,
+            },
+            requestOptions,
+        );
     } catch (error) {
         throw new Error(getNetworkErrorMessage(error));
     }
@@ -574,11 +582,11 @@ async function apiRequest(path, options = {}) {
     return data;
 }
 
-async function apiFormRequest(path, formData) {
+async function apiFormRequest(path, formData, requestOptions = {}) {
     return apiRequest(path, {
         method: "POST",
         body: formData,
-    });
+    }, requestOptions);
 }
 
 async function apiBlobRequest(path, options = {}) {
@@ -607,12 +615,93 @@ async function apiBlobRequest(path, options = {}) {
     return response.blob();
 }
 
+async function fetchWithNetworkRetry(url, fetchOptions = {}, requestOptions = {}) {
+    const retryCount = Math.max(Number(requestOptions.retryCount || 0), 0);
+    const retryDelaysMs = requestOptions.retryDelaysMs || [];
+    let lastError = null;
+
+    for (let attemptIndex = 0; attemptIndex <= retryCount; attemptIndex += 1) {
+        try {
+            return await fetch(url, fetchOptions);
+        } catch (error) {
+            lastError = error;
+            if (!isTransientNetworkError(error)) {
+                throw error;
+            }
+            if (attemptIndex >= retryCount) {
+                throw new Error(
+                    `网络请求失败：已自动重试 ${retryCount} 次仍未连通，请保持页面打开并检查网络后重试。`,
+                );
+            }
+
+            const delayMs = retryDelaysMs[attemptIndex] ?? ((attemptIndex + 1) * 1000);
+            requestOptions.onRetry?.({
+                attemptIndex,
+                nextAttemptNumber: attemptIndex + 2,
+                totalAttempts: retryCount + 1,
+                delayMs,
+                error,
+            });
+            await waitMs(delayMs);
+        }
+    }
+
+    throw lastError || new Error("网络请求失败");
+}
+
+function isTransientNetworkError(error) {
+    const message = String(error?.message || error || "");
+    return /load failed|failed to fetch|networkerror|network request failed|connection|timeout/i
+        .test(message);
+}
+
 function getNetworkErrorMessage(error) {
     const message = String(error?.message || "网络请求失败");
-    if (/load failed|failed to fetch|networkerror/i.test(message)) {
-        return "网络请求失败：图片可能过大或连接中断，请重试。";
+    if (isTransientNetworkError(error)) {
+        return "网络请求失败：连接可能短暂中断，请保持页面打开并重试。";
     }
     return message;
+}
+
+function waitMs(delayMs) {
+    return new Promise((resolve) => {
+        window.setTimeout(resolve, delayMs);
+    });
+}
+
+async function requestRecognitionWakeLock() {
+    if (
+        typeof navigator === "undefined"
+        || !navigator.wakeLock?.request
+    ) {
+        return null;
+    }
+
+    try {
+        return await navigator.wakeLock.request(RECOGNITION_WAKE_LOCK_TYPE);
+    } catch {
+        return null;
+    }
+}
+
+function releaseRecognitionWakeLock(wakeLock) {
+    if (!wakeLock?.release) {
+        return;
+    }
+    wakeLock.release().catch(() => {});
+}
+
+function buildRecognitionNetworkRetryOptions(statusCallback) {
+    return {
+        retryCount: RECOGNITION_NETWORK_RETRY_COUNT,
+        retryDelaysMs: RECOGNITION_NETWORK_RETRY_DELAYS_MS,
+        onRetry: ({nextAttemptNumber, totalAttempts, delayMs}) => {
+            statusCallback?.(
+                `网络连接中断，${(delayMs / 1000).toFixed(1)} 秒后自动重试 `
+                + `(${nextAttemptNumber}/${totalAttempts})...`,
+            );
+        },
+    };
 }
 
 async function parseResponse(response) {
@@ -3762,7 +3851,9 @@ async function uploadRecognition(event) {
     event.preventDefault();
     setRecognitionBusy(true);
     setRecognitionStatus("正在上传图片并等待 VLM 识别...");
+    let wakeLock = null;
     try {
+        wakeLock = await requestRecognitionWakeLock();
         const file = q("#recognition-file").files[0];
         if (!file) {
             throw new Error("请选择图片");
@@ -3800,13 +3891,18 @@ async function uploadRecognition(event) {
             formData.append("layout_type", q("#recognition-layout-type").value);
             path = "/ai/recognize_box_layout_image";
         }
-        const result = await apiFormRequest(path, formData);
+        const result = await apiFormRequest(
+            path,
+            formData,
+            buildRecognitionNetworkRetryOptions(setRecognitionStatus),
+        );
         renderRecognitionResult(result);
         showToast("识别完成");
     } catch (error) {
         setRecognitionStatus(error.message, true);
         showToast(error.message);
     } finally {
+        releaseRecognitionWakeLock(wakeLock);
         setRecognitionBusy(false);
     }
 }
@@ -3918,7 +4014,9 @@ async function recognizeTemplateLayout() {
     }
     setTemplateRecognitionBusy(true);
     showToast("正在识别模板布局...");
+    let wakeLock = null;
     try {
+        wakeLock = await requestRecognitionWakeLock();
         const uploadFile = await prepareRecognitionUploadFile(file, showToast);
         if (uploadFile.compressed) {
             showToast(
@@ -3929,7 +4027,11 @@ async function recognizeTemplateLayout() {
         formData.append("file", uploadFile.file, uploadFile.filename);
         formData.append("layout_type", q("#template-recognition-layout-type").value);
         formData.append("additional_prompt", q("#template-recognition-prompt").value);
-        const result = await apiFormRequest("/ai/recognize_box_layout_image", formData);
+        const result = await apiFormRequest(
+            "/ai/recognize_box_layout_image",
+            formData,
+            buildRecognitionNetworkRetryOptions(showToast),
+        );
         const parsed = result.parsed_result;
         if (!parsed) {
             throw new Error("模型返回内容无法解析");
@@ -3939,6 +4041,7 @@ async function recognizeTemplateLayout() {
         );
         showToast("模板识别结果已填入表单");
     } finally {
+        releaseRecognitionWakeLock(wakeLock);
         setTemplateRecognitionBusy(false);
     }
 }

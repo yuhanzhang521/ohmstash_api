@@ -79,7 +79,14 @@ def run_app_js_expression(expression: str) -> Any:
         vm.createContext(context);
         vm.runInContext(code, context);
         const result = vm.runInContext({json.dumps(expression)}, context);
-        console.log(JSON.stringify(result));
+        Promise.resolve(result)
+            .then((resolved) => {{
+                console.log(JSON.stringify(resolved));
+            }})
+            .catch((error) => {{
+                console.error(error && error.stack ? error.stack : error);
+                process.exit(1);
+            }});
         """
     )
     completed = subprocess.run(
@@ -366,6 +373,7 @@ def test_recognition_upload_helpers_target_mobile_large_images() -> None:
                 }),
                 filename: buildCompressedImageFilename("box.photo.png"),
                 networkMessage: getNetworkErrorMessage(new Error("Load failed")),
+                retryCount: RECOGNITION_NETWORK_RETRY_COUNT,
             };
         })()
         """
@@ -375,7 +383,47 @@ def test_recognition_upload_helpers_target_mobile_large_images() -> None:
     assert result["pngByExtension"] is True
     assert result["heic"] is False
     assert result["filename"] == "box.photo-compressed.jpg"
-    assert "图片可能过大" in result["networkMessage"]
+    assert "短暂中断" in result["networkMessage"]
+    assert result["retryCount"] == 2
+
+
+def test_recognition_upload_requests_retry_transient_network_errors() -> None:
+    result = run_app_js_expression(
+        """
+        (async () => {
+            let attempts = 0;
+            const statuses = [];
+            window.setTimeout = (callback) => {
+                callback();
+                return 0;
+            };
+            fetch = () => {
+                attempts += 1;
+                if (attempts < 3) {
+                    return Promise.reject(new Error("Failed to fetch"));
+                }
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    statusText: "OK",
+                    text: () => Promise.resolve('{"ok": true}'),
+                });
+            };
+
+            const response = await apiRequest(
+                "/retry-test",
+                {},
+                buildRecognitionNetworkRetryOptions((message) => statuses.push(message)),
+            );
+            return {attempts, statuses, response};
+        })()
+        """
+    )
+
+    assert result["attempts"] == 3
+    assert len(result["statuses"]) == 2
+    assert "自动重试 (2/3)" in result["statuses"][0]
+    assert result["response"]["ok"] is True
 
 
 def test_login_asset_is_served() -> None:
