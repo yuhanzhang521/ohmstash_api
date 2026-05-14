@@ -1064,6 +1064,9 @@ function renderTemplateList() {
 
 function renderBoxList() {
     const list = q("#box-list");
+    if (!list) {
+        return;
+    }
     list.innerHTML = "";
     if (!state.boxes.length) {
         list.innerHTML = '<div class="empty-panel compact-empty">还没有盒子。</div>';
@@ -1074,9 +1077,13 @@ function renderBoxList() {
         const card = document.createElement("article");
         card.className = "box-card";
         card.innerHTML = `
-            <h4>${escapeHtml(box.readable_id)}</h4>
+            <div class="box-card-head">
+                <h4>${escapeHtml(box.readable_id)}</h4>
+                ${renderReprintBadge(box)}
+            </div>
             <p>${escapeHtml(box.name || "未命名盒子")}</p>
             <p>${escapeHtml(template?.name || "未知模板")}</p>
+            ${renderBoxCategorySummary(box)}
             <div class="card-actions">
                 <button class="small-button" type="button" data-action="open-manage-box" data-id="${box.id}">进入</button>
                 <button class="small-button" type="button" data-action="show-box-label" data-id="${box.id}">标签</button>
@@ -1123,9 +1130,13 @@ function renderDashboardBoxes() {
         const card = document.createElement("article");
         card.className = "box-card";
         card.innerHTML = `
-            <h4>${escapeHtml(box.readable_id)}</h4>
+            <div class="box-card-head">
+                <h4>${escapeHtml(box.readable_id)}</h4>
+                ${renderReprintBadge(box)}
+            </div>
             <p>${escapeHtml(box.name || "未命名盒子")}</p>
             <p>${escapeHtml(template?.name || "未知模板")}</p>
+            ${renderBoxCategorySummary(box)}
             <div class="card-actions">
                 <button class="small-button" type="button" data-action="open-manage-box" data-id="${box.id}">进入</button>
             </div>
@@ -1245,10 +1256,15 @@ function renderManageBoxes() {
         card.dataset.action = "open-manage-box";
         card.dataset.id = box.id;
         card.innerHTML = `
-            <h4>${escapeHtml(box.readable_id)}</h4>
+            <div class="box-card-head">
+                <h4>${escapeHtml(box.readable_id)}</h4>
+                ${renderReprintBadge(box)}
+            </div>
             <p>${escapeHtml(box.name || "未命名盒子")} · ${escapeHtml(template?.name || "未知模板")}</p>
+            ${renderBoxCategorySummary(box)}
             <div class="card-actions">
                 <button class="small-button" type="button" data-action="edit-box" data-id="${box.id}">编辑</button>
+                <button class="small-button" type="button" data-action="show-box-label" data-id="${box.id}">标签</button>
                 <button class="danger-button" type="button" data-action="delete-box" data-id="${box.id}">删除</button>
             </div>
         `;
@@ -2393,6 +2409,21 @@ function renderTagChips(tags) {
     return tags.map((tag) => {
         return `<span class="tag-chip ${getTagToneClass(tag)}">${escapeHtml(tag)}</span>`;
     }).join("");
+}
+
+function renderBoxCategorySummary(box) {
+    const summary = Array.isArray(box?.category_summary) ? box.category_summary : [];
+    if (!summary.length) {
+        return "";
+    }
+    return `<div class="chip-row category-chip-row">${renderTagChips(summary)}</div>`;
+}
+
+function renderReprintBadge(box) {
+    if (!box || !box.label_needs_reprint) {
+        return "";
+    }
+    return '<span class="reprint-badge" title="盒内内容已变化，建议重新打印标签">待重打印</span>';
 }
 
 function renderAttributesView(attributes) {

@@ -25,6 +25,18 @@
     --danger: #b42318;
     --shadow: 0 10px 28px rgb(20 31 42 / 7%);
     --focus-ring: rgb(15 118 110 / 14%);
+    --control-height-sm: 28px;
+    --control-height-md: 34px;
+    --control-height-lg: 40px;
+    --control-padding-x: 11px;
+    --control-padding-y: 7px;
+    --control-radius: 7px;
+    --control-font-size: 14px;
+    --control-font-size-sm: 12px;
+    --gap-xs: 4px;
+    --gap-sm: 6px;
+    --gap-md: 8px;
+    --gap-lg: 12px;
 }
 
 :root[data-theme="dark"] {
@@ -195,7 +207,7 @@ textarea {
 .mobile-nav-button,
 .segment-button {
     border: 1px solid transparent;
-    border-radius: 7px;
+    border-radius: var(--control-radius);
     background: transparent;
     color: var(--muted);
 }
@@ -443,12 +455,13 @@ input,
 select,
 textarea {
     width: 100%;
-    min-height: 36px;
+    min-height: var(--control-height-md);
     border: 1px solid var(--line-strong);
-    border-radius: 7px;
+    border-radius: var(--control-radius);
     background: var(--control-bg);
     color: var(--text);
-    padding: 7px 9px;
+    padding: var(--control-padding-y) var(--control-padding-x);
+    font-size: var(--control-font-size);
     outline: none;
 }
 
@@ -492,10 +505,11 @@ textarea:focus {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 36px;
-    border-radius: 7px;
+    min-height: var(--control-height-md);
+    border-radius: var(--control-radius);
     border: 1px solid transparent;
-    padding: 7px 11px;
+    padding: var(--control-padding-y) var(--control-padding-x);
+    font-size: var(--control-font-size);
     white-space: nowrap;
 }
 
@@ -527,9 +541,9 @@ textarea:focus {
 }
 
 .small-button {
-    min-height: 30px;
-    padding: 5px 9px;
-    font-size: 12px;
+    min-height: var(--control-height-sm);
+    padding: 4px 9px;
+    font-size: var(--control-font-size-sm);
 }
 
 .disabled-link {
@@ -721,9 +735,9 @@ textarea:focus {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 32px;
+    min-height: var(--control-height-sm);
     border: 1px solid var(--line-strong);
-    border-radius: 7px;
+    border-radius: var(--control-radius);
     background: var(--control-bg);
     color: var(--danger);
 }
@@ -845,6 +859,38 @@ textarea:focus {
     overflow-wrap: anywhere;
 }
 
+.box-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--gap-md);
+}
+
+.box-card-head h4 {
+    margin: 0;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.reprint-badge {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgb(161 98 7 / 14%);
+    color: var(--amber);
+    border: 1px solid rgb(161 98 7 / 32%);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.category-chip-row {
+    margin-top: 6px;
+}
+
 .item-card p,
 .provider-card p,
 .box-card p,
@@ -936,12 +982,13 @@ textarea:focus {
 
 .segment-button,
 .settings-tab {
-    min-height: 36px;
+    min-height: var(--control-height-md);
     border: 1px solid var(--line-strong);
-    border-radius: 7px;
+    border-radius: var(--control-radius);
     background: var(--control-bg);
     color: var(--text);
-    padding: 6px 10px;
+    padding: var(--control-padding-y) var(--control-padding-x);
+    font-size: var(--control-font-size);
 }
 
 .settings-tab.active {

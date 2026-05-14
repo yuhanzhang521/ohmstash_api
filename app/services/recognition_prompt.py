@@ -6,6 +6,20 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.box import Box
 from app.models.box_template import BoxTemplate
 from app.models.tag import Tag
+from app.services.box_name_rules import BOX_NAME_MAX_DISPLAY_WIDTH
+
+
+BOX_NAME_RULE_TEXT = (
+    f"盒子名称的显示宽度必须不超过 {BOX_NAME_MAX_DISPLAY_WIDTH}（汉字按 2 计、英数字符按 1 计），"
+    f"即最多 7 个汉字、或 6 个汉字加 2 个英数字符、或 14 个英数字符。"
+    "不要包含“收纳盒”“盒子”“盒”等后缀；例如返回“电源芯片”而不是“电源芯片盒”。"
+)
+
+NOTES_RULE_TEXT = (
+    "notes 只允许写器件本身的补充信息（用途、功能、关键参数解释等），"
+    "禁止写拍摄角度、标签朝向、标签是否可见、标签包含几行字、竖放横放等图像或拍摄过程的旁白；"
+    "看不到或不确定的，notes 留空。"
+)
 
 
 def build_component_recognition_prompt(
@@ -35,6 +49,7 @@ def build_component_recognition_prompt(
         "阻容感优先选择阻值、容值或电感值，例如名称为 0603 75pF 50V 10% 时，"
         "attributes 写入容值=75pF 且 display_attribute 写入容值。"
         "芯片、模块或传感器可以选择型号；长型号允许在前端被省略号截断，不要为了缩略显示改短 name。\n\n"
+        f"{NOTES_RULE_TEXT}\n\n"
         f"Tag 与属性库：\n{tag_catalog}\n\n"
         "请只返回一个 JSON 对象，不要返回 Markdown，不要额外解释。格式必须是：\n"
         "{\n"
@@ -117,8 +132,7 @@ def build_new_box_recognition_prompt(
         f"{base_prompt}\n\n"
         "这是一张准备新建入库盒子的完整照片。请根据下面盒子模板，把每个子格分别识别出来。\n"
         "请同时根据盒内主要元器件给这个盒子起一个简短、适合打印在标签上的中文名称。"
-        "盒子名称必须控制在 7 个字符以内，不要包含“收纳盒”“盒子”“盒”等后缀；"
-        "例如返回“电源芯片”而不是“电源芯片盒”。\n"
+        f"{BOX_NAME_RULE_TEXT}\n"
         "规则网格的规格文字按“列x行”理解，例如 7 行 4 列写作 4x7。\n"
         f"盒子模板 JSON：{json.dumps(layout_payload, ensure_ascii=False)}\n"
         "请只返回一个 JSON 对象，格式必须是：\n"
@@ -188,8 +202,8 @@ def build_box_template_recognition_prompt(
         "template_name 只能按盒子结构特征命名，不能包含识别到的盒内物品类别。"
         "规则网格命名按“列x行格”，例如 4 列 7 行写作 4x7格。"
         "不规则网格命名按“不规则N格”，例如 14 个小格写作“不规则14格”。"
-        "box_name 才根据盒内主要元器件命名，并控制在 7 个字符以内，"
-        "不要包含“收纳盒”“盒子”“盒”等后缀。\n"
+        f"box_name 才根据盒内主要元器件命名。{BOX_NAME_RULE_TEXT}\n"
+        f"再次强调：{NOTES_RULE_TEXT}\n"
         "请只返回一个 JSON 对象，不要返回 Markdown，不要额外解释。格式必须是：\n"
         "{\n"
         '  "template_name": "4x7格",\n'
@@ -210,3 +224,4 @@ def build_box_template_recognition_prompt(
         "  ]\n"
         "}\n"
     )
+

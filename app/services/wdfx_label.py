@@ -41,7 +41,6 @@ WDFX_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <Page>
         <Qrcode>
             <printing>true</printing>
-            <dataColumnName />
             <dataColumn>1</dataColumn>
             <zoneSize>0</zoneSize>
             <degreeOffset>1</degreeOffset>
@@ -60,9 +59,8 @@ WDFX_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <contentType>0</contentType>
             <height>5.233</height>
             <dmCodeShape>2</dmCodeShape>
-            <contentId />
-            <waterMarkMode>-1</waterMarkMode>
             <y>9.000</y>
+            <waterMarkMode>-1</waterMarkMode>
             <width>11.979</width>
             <mode>0</mode>
             <degreeLength>0</degreeLength>
@@ -70,7 +68,6 @@ WDFX_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         </Qrcode>
         <Text>
             <printing>true</printing>
-            <dataColumnName />
             <dataColumn>1</dataColumn>
             <verDisplay>false</verDisplay>
             <degreeOffset>1</degreeOffset>
@@ -87,19 +84,17 @@ WDFX_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <y>1.000</y>
             <contentType>0</contentType>
             <mirrorIndex>0</mirrorIndex>
-            <width>29.634</width>
+            <width>15.288</width>
             <height>3.307</height>
-            <contentId />
             <fontHeight>2.822</fontHeight>
             <fontStyle>0x0</fontStyle>
             <horAlignment>0</horAlignment>
             <lineSpace>1_0</lineSpace>
             <degreeLength>0</degreeLength>
-            <content>BOX-0001</content>
+            <content>BOX-0148</content>
         </Text>
         <Text>
             <printing>true</printing>
-            <dataColumnName />
             <dataColumn>1</dataColumn>
             <verDisplay>false</verDisplay>
             <degreeOffset>1</degreeOffset>
@@ -116,19 +111,17 @@ WDFX_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <y>6.860</y>
             <contentType>0</contentType>
             <mirrorIndex>0</mirrorIndex>
-            <width>29.634</width>
+            <width>15.150</width>
             <height>2.481</height>
-            <contentId />
             <fontHeight>2.117</fontHeight>
             <fontStyle>0x0</fontStyle>
             <horAlignment>0</horAlignment>
             <lineSpace>1_0</lineSpace>
             <degreeLength>0</degreeLength>
-            <content>4x7器件盒</content>
+            <content>盒子类型</content>
         </Text>
         <Text>
             <printing>true</printing>
-            <dataColumnName />
             <dataColumn>1</dataColumn>
             <verDisplay>false</verDisplay>
             <degreeOffset>1</degreeOffset>
@@ -145,19 +138,17 @@ WDFX_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <y>4.222</y>
             <contentType>0</contentType>
             <mirrorIndex>0</mirrorIndex>
-            <width>29.634</width>
+            <width>14.900</width>
             <height>2.481</height>
-            <contentId />
             <fontHeight>2.117</fontHeight>
             <fontStyle>0x0</fontStyle>
             <horAlignment>0</horAlignment>
             <lineSpace>1_0</lineSpace>
             <degreeLength>0</degreeLength>
-            <content>电源与传感器</content>
+            <content>盒子名称</content>
         </Text>
         <Text>
             <printing>true</printing>
-            <dataColumnName />
             <dataColumn>1</dataColumn>
             <verDisplay>false</verDisplay>
             <degreeOffset>1</degreeOffset>
@@ -168,7 +159,7 @@ WDFX_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <autoReturn>0</autoReturn>
             <antiColor>false</antiColor>
             <contentInputType>16777216</contentInputType>
-            <x>15.596</x>
+            <x>16.000</x>
             <lockMovement>false</lockMovement>
             <orientation>0</orientation>
             <y>0.679</y>
@@ -176,7 +167,6 @@ WDFX_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <mirrorIndex>0</mirrorIndex>
             <width>13.601</width>
             <height>13.642</height>
-            <contentId />
             <fontHeight>1.940</fontHeight>
             <fontStyle>0x0</fontStyle>
             <horAlignment>1</horAlignment>
@@ -216,7 +206,7 @@ def generate_box_label_wdfx(box: Box) -> str:
     _set_text_content(text_nodes, y_value="6.860", content=template_label)
     _set_text_content(
         text_nodes,
-        x_value="15.596",
+        x_value="16.000",
         content="\n".join(summary_lines),
     )
     ElementTree.indent(root, space="    ")
@@ -244,3 +234,4 @@ def _set_text_content(
             if content_node is not None:
                 content_node.text = content
             return
+

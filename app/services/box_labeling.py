@@ -4,9 +4,26 @@ from typing import Any, List
 from sqlalchemy.orm import Session
 
 from app import models
+from app.services.box_name_rules import (
+    BOX_NAME_MAX_DISPLAY_WIDTH,
+    compute_display_width,
+    is_box_name_within_limit,
+)
 
 MAX_LABEL_SUMMARY_LINES = 6
 MAX_LABEL_SUMMARY_CHARS = 10
+
+__all__ = [
+    "BOX_NAME_MAX_DISPLAY_WIDTH",
+    "MAX_LABEL_SUMMARY_CHARS",
+    "MAX_LABEL_SUMMARY_LINES",
+    "build_box_label_summary_lines",
+    "compute_box_category_summary",
+    "compute_display_width",
+    "format_template_label",
+    "generate_next_box_readable_id",
+    "is_box_name_within_limit",
+]
 
 
 def generate_next_box_readable_id(db: Session) -> str:
@@ -33,7 +50,7 @@ def format_template_label(
     return template_name
 
 
-def build_box_label_summary_lines(box: models.Box) -> List[str]:
+def compute_box_category_summary(box: models.Box) -> List[str]:
     labels: Counter[str] = Counter()
     fallback_names: Counter[str] = Counter()
 
@@ -50,13 +67,20 @@ def build_box_label_summary_lines(box: models.Box) -> List[str]:
 
     source = labels if labels else fallback_names
     if not source:
-        return _center_label_lines(["空盒"])
+        return []
 
     ordered_lines = [
         label
         for label, _count in source.most_common(MAX_LABEL_SUMMARY_LINES)
         if label
     ]
+    return ordered_lines
+
+
+def build_box_label_summary_lines(box: models.Box) -> List[str]:
+    ordered_lines = compute_box_category_summary(box)
+    if not ordered_lines:
+        return _center_label_lines(["空盒"])
     return _center_label_lines(ordered_lines)
 
 
@@ -82,3 +106,4 @@ def _center_label_lines(lines: List[str]) -> List[str]:
 def _shorten_label_line(value: str) -> str:
     compact_value = " ".join(str(value).split())
     return compact_value[:MAX_LABEL_SUMMARY_CHARS]
+

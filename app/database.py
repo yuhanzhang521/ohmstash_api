@@ -37,4 +37,22 @@ def ensure_schema_compatibility() -> None:
                 )
             )
 
+    if "boxes" in inspector.get_table_names():
+        box_columns = {
+            column["name"] for column in inspector.get_columns("boxes")
+        }
+        if "printed_label_signature" not in box_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE boxes ADD COLUMN printed_label_signature TEXT")
+                )
+        if "printed_label_at" not in box_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE boxes "
+                        "ADD COLUMN printed_label_at TIMESTAMP WITH TIME ZONE"
+                    )
+                )
+
     _schema_compatibility_checked = True

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -7,6 +8,7 @@ from app import crud, models, schemas
 from app.api import deps
 from app.services.box_labeling import (
     build_box_label_summary_lines,
+    compute_box_category_summary,
     generate_next_box_readable_id,
 )
 from app.services.component_display import build_component_display_name
@@ -120,6 +122,9 @@ def read_box_overview(
             "physical_dimensions": template.physical_dimensions,
         },
         sub_boxes=sub_box_overviews,
+        category_summary=compute_box_category_summary(box),
+        label_needs_reprint=box.label_needs_reprint,
+        printed_label_at=box.printed_label_at,
     )
 
 
@@ -161,6 +166,10 @@ def read_box_label_wdfx(
         raise HTTPException(status_code=404, detail="Box not found")
 
     wdfx = generate_box_label_wdfx(box)
+    box.printed_label_signature = box.current_label_signature
+    box.printed_label_at = datetime.now(timezone.utc)
+    db.add(box)
+    db.commit()
     return Response(
         content=wdfx,
         media_type="application/octet-stream",

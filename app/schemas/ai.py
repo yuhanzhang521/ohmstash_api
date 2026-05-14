@@ -1,7 +1,8 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.box import _validate_box_name
 from app.schemas.box_template import LayoutDefinition, LayoutType
 from app.schemas.inventory import QuantityFuzzyEnum, StockModeEnum
 from app.schemas.vlm_provider_config import VlmProviderConfigCreate
@@ -59,6 +60,10 @@ class ConfirmNewBoxRecognitionRequest(BaseModel):
     readable_id: Optional[str] = None
     cells: List[RecognizedCell]
 
+    _validate_box_name = field_validator("box_name")(
+        lambda cls, value: _validate_box_name(value)
+    )
+
 
 class ConfirmAutoBoxRecognitionRequest(BaseModel):
     template_name: str
@@ -68,6 +73,10 @@ class ConfirmAutoBoxRecognitionRequest(BaseModel):
     box_name: Optional[str] = None
     readable_id: Optional[str] = None
     cells: List[RecognizedCell]
+
+    _validate_box_name = field_validator("box_name")(
+        lambda cls, value: _validate_box_name(value)
+    )
 
 
 class ConfirmBoxRecognitionResult(BaseModel):

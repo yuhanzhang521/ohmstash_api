@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -18,6 +19,9 @@ class BoxOverview(BaseModel):
     name: Optional[str] = None
     template: Dict[str, Any]
     sub_boxes: List[SubBoxOverview]
+    category_summary: List[str] = Field(default_factory=list)
+    label_needs_reprint: bool = False
+    printed_label_at: Optional[datetime] = None
 
 
 class MoveInventoryRequest(BaseModel):

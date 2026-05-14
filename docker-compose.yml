@@ -42,7 +42,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "443:443/udp"
+      - "443:443/tcp"
     volumes:
       - ./caddy:/etc/caddy
       - ohmstash-caddy-data:/data

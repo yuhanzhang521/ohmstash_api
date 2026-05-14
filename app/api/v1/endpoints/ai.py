@@ -47,6 +47,55 @@ ATTRIBUTE_UNCERTAINTY_PATTERNS = [
     re.compile(r"[（(][^（）()]{0,30}(?:未能|不能|无法|不足|不确定|待确认|不同厂商|版本不一致)[^（）()]{0,40}[）)]"),
     re.compile(r"(?:未能|不能|无法|不足|不确定|待确认|不同厂商|版本不一致)[^。；;，,\n]*"),
 ]
+PHOTO_META_KEYWORDS = (
+    "拍摄角度",
+    "拍照角度",
+    "拍摄方向",
+    "拍摄环境",
+    "拍摄面",
+    "在画面",
+    "在图中",
+    "标签可见",
+    "标签显示",
+    "标签含",
+    "标签朝向",
+    "标签朝",
+    "标签清晰",
+    "标签上",
+    "标签为",
+    "标签是",
+    "标签写",
+    "竖放",
+    "横放",
+    "竖立",
+    "侧立",
+    "倒置",
+    "正面朝",
+    "背面朝",
+    "镜头",
+    "照片",
+    "图片中",
+    "字体",
+    "字号",
+    "印刷字",
+    "丝印",
+    "丝网",
+    "光线",
+    "阴影",
+    "反光",
+    "倾斜放置",
+    "斜放",
+    "高亮",
+    "包装袋",
+    "包装上",
+    "袋装",
+    "纸标签",
+)
+PHOTO_META_SENTENCE_PATTERN = re.compile(
+    r"[^。；;\n]*(?:"
+    + "|".join(re.escape(keyword) for keyword in PHOTO_META_KEYWORDS)
+    + r")[^。；;\n]*[。；;]?"
+)
 
 
 def _ensure_unique_config_name(
@@ -265,6 +314,8 @@ def _persist_box_recognition_cells(
             skipped_empty_cells += 1
             continue
 
+        sanitized_notes = _sanitize_recognition_notes(cell.notes)
+
         tag_ids = _get_or_create_tag_ids(db=db, tag_names=cell.tags)
         component = (
             db.query(models.Component)
@@ -276,7 +327,7 @@ def _persist_box_recognition_cells(
                 db=db,
                 obj_in=schemas.ComponentCreate(
                     name=cell.name,
-                    description=cell.notes,
+                    description=sanitized_notes,
                     attributes=cell.attributes,
                     display_attribute=cell.display_attribute,
                     tag_ids=tag_ids,
@@ -301,7 +352,7 @@ def _persist_box_recognition_cells(
             stock_mode=cell.stock_mode,
             quantity_exact=cell.quantity_exact,
             quantity_fuzzy=cell.quantity_fuzzy,
-            notes=cell.notes,
+            notes=sanitized_notes,
         )
         if inventory_item:
             crud.inventory.update(
@@ -402,13 +453,28 @@ def _clean_verification_notes(value: Any) -> Optional[str]:
         return None
     correction_note, _correction_warning = _split_model_correction_note(text)
     if correction_note:
-        return correction_note
+        return _strip_photo_meta_phrases(correction_note) or None
     text = _remove_multi_correction_warning(text)
     for pattern in VERIFICATION_WARNING_PATTERNS:
         text = pattern.sub("", text)
     text = re.sub(r"(?:联网)?搜索摘要确认[:：]?\s*", "", text)
     text = re.sub(r"联网确认[:：]?\s*", "", text)
+    text = _strip_photo_meta_phrases(text)
     text = text.strip("。；;，, \n\t")
+    return text or None
+
+
+def _strip_photo_meta_phrases(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    cleaned = PHOTO_META_SENTENCE_PATTERN.sub("", text)
+    cleaned = re.sub(r"[\s。；;，,]+", lambda match: match.group(0)[0], cleaned)
+    return cleaned.strip("。；;，, \n\t")
+
+
+def _sanitize_recognition_notes(value: Any) -> Optional[str]:
+    text = _strip_photo_meta_phrases(value)
     return text or None
 
 
