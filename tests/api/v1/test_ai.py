@@ -64,9 +64,11 @@ def test_recognition_and_verification_prompts_include_name_rules(
     prompt = response.json()["prompt"]
 
     assert recognition_prompt.COMPONENT_NAME_RULE_TEXT in prompt
-    assert "12V 离心风扇" in prompt
+    assert "12V离心风扇" in prompt
+    assert "SG90舵机" in prompt
     assert "薄膜压力传感器" in prompt
     assert "触摸开关模块" in prompt
+    assert "name 和 attributes 不互斥" in prompt
 
     verification_prompt = ai_endpoint._build_verification_prompt(
         items=[
@@ -106,13 +108,24 @@ def test_component_name_normalization_prefers_function_nouns() -> None:
                     "tags": ["模块"],
                     "attributes": {},
                 },
+                {
+                    "position_identifier": "R1C4",
+                    "is_empty": False,
+                    "name": "舵机 SG90",
+                    "tags": ["舵机"],
+                    "attributes": {},
+                },
             ]
         }
     )
 
     assert normalized
     names = [cell["name"] for cell in normalized["cells"]]
-    assert names == ["12V 离心风扇", "薄膜压力传感器", "触摸开关模块"]
+    assert names == ["12V离心风扇", "薄膜压力传感器", "触摸开关模块", "SG90舵机"]
+    assert normalized["cells"][0]["attributes"]["供电电压"] == "12V"
+    assert normalized["cells"][0]["attributes"]["类型"] == "离心风扇"
+    assert normalized["cells"][3]["attributes"]["型号"] == "SG90"
+    assert normalized["cells"][3]["attributes"]["类型"] == "舵机"
 
 
 def test_component_name_normalization_formats_passive_and_ic_names() -> None:
@@ -372,6 +385,34 @@ def test_create_recognition_session_returns_queued_session(
     response = client.get(f"{settings.API_V1_STR}/ai/recognition_sessions")
     assert response.status_code == 200
     assert response.json()[0]["id"] == content["id"]
+
+
+def test_delete_finished_recognition_session(
+    client: TestClient,
+    db: Session,
+) -> None:
+    recognition_session = models.RecognitionSession(
+        owner_kind="user",
+        owner_id=1,
+        owner_name="admin",
+        mode="single_image",
+        status="succeeded",
+        verification_status="skipped",
+        filename="old-session.png",
+        content_type="image/png",
+        additional_prompt="",
+        overwrite_existing=False,
+    )
+    db.add(recognition_session)
+    db.commit()
+    db.refresh(recognition_session)
+
+    response = client.delete(
+        f"{settings.API_V1_STR}/ai/recognition_sessions/{recognition_session.id}",
+    )
+
+    assert response.status_code == 204
+    assert db.get(models.RecognitionSession, recognition_session.id) is None
 
 
 def test_recognition_session_background_stores_verified_result(

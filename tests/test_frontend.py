@@ -229,6 +229,65 @@ def test_irregular_recognition_editing_keeps_layout_placement() -> None:
     assert result["c3GridColumn"] == "3 / span 1"
 
 
+def test_irregular_recognition_shows_layout_labels() -> None:
+    result = run_app_js_expression(
+        """
+        (() => {
+            const layoutCell = {
+                id: "A1",
+                label: "左上标签",
+                row: 1,
+                col: 1,
+            };
+            const matched = findRecognitionCellForLayout(
+                [{position_identifier: "左上标签", name: "SG90舵机"}],
+                layoutCell,
+                0,
+            );
+            const viewer = document.createElement("div");
+            document.querySelector = (selector) => {
+                if (selector === "#ai-result-viewer") {
+                    return viewer;
+                }
+                if (selector === "#recognition-box-id") {
+                    return {value: "1"};
+                }
+                return null;
+            };
+            state.recognitionMode = "existing_box";
+            state.recognitionEditing = false;
+            state.boxes = [{id: 1, template_id: 1}];
+            state.templates = [{
+                id: 1,
+                layout_type: "irregular",
+                layout_definition: {rows: 1, cols: 1, cells: [layoutCell]},
+            }];
+            state.recognitionCells = [normalizeRecognitionCell({
+                position_identifier: "A1",
+                layout_label: "左上标签",
+                is_empty: false,
+                name: "SG90舵机",
+                tags: ["舵机"],
+                attributes: {"型号": "SG90", "类型": "舵机"},
+            }, 0)];
+
+            renderRecognitionCards();
+            const card = viewer.children[0].children[0];
+            return {
+                matchedName: matched.name,
+                layoutLabel: state.recognitionCells[0].layout_label,
+                cardHtml: card.innerHTML,
+            };
+        })()
+        """
+    )
+
+    assert result["matchedName"] == "SG90舵机"
+    assert result["layoutLabel"] == "左上标签"
+    assert "layout-label-pill" in result["cardHtml"]
+    assert "左上标签" in result["cardHtml"]
+
+
 def test_manage_grid_uses_scrollable_equal_width_columns() -> None:
     result = run_app_js_expression(
         """
@@ -345,6 +404,8 @@ def test_frontend_assets_are_served() -> None:
     assert "verifySelectedComponents" in response.text
     assert "/ai/recognition_sessions" in response.text
     assert "openRecognitionSession" in response.text
+    assert "deleteRecognitionSession" in response.text
+    assert "setRecognitionHistoryFilter" in response.text
     assert "recognizeTemplateLayout" in response.text
     assert "createComponentSummaryHtml" in response.text
     assert "runAiSearch" in response.text
@@ -506,7 +567,7 @@ def test_recognition_draft_restores_until_explicitly_cleared() -> None:
                 {
                     position_identifier: "R1C1",
                     is_empty: false,
-                    name: "12V 离心风扇",
+                    name: "12V离心风扇",
                     tags: ["风扇"],
                     attributes: {"供电电压": "12V"},
                     display_attribute: "供电电压",
@@ -544,9 +605,9 @@ def test_recognition_draft_restores_until_explicitly_cleared() -> None:
     )
 
     assert result["saved"] is True
-    assert result["storedName"] == "12V 离心风扇"
+    assert result["storedName"] == "12V离心风扇"
     assert result["restored"] is True
-    assert result["restoredName"] == "12V 离心风扇"
+    assert result["restoredName"] == "12V离心风扇"
     assert result["restoredPrompt"] == "优先使用功能名词"
     assert "已恢复未入库结果" in result["restoredSummary"]
     assert result["draftExistsAfterClear"] is False
@@ -558,6 +619,83 @@ def test_recognition_uses_sessions_instead_of_unload_warning() -> None:
     assert "beforeunload" not in response.text
     assert "warnBeforeUnloadDuringAi" not in response.text
     assert "RECOGNITION_ACTIVE_SESSION_STORAGE_KEY" in response.text
+
+
+def test_recognition_history_filters_compact_session_list() -> None:
+    result = run_app_js_expression(
+        """
+        (() => {
+            const list = document.createElement("div");
+            const count = document.createElement("span");
+            const filters = ["all", "active", "succeeded", "failed"].map((filter) => {
+                const button = document.createElement("button");
+                button.dataset.filter = filter;
+                return button;
+            });
+            document.querySelector = (selector) => {
+                if (selector === "#recognition-session-list") {
+                    return list;
+                }
+                if (selector === "#recognition-history-count") {
+                    return count;
+                }
+                return null;
+            };
+            document.querySelectorAll = (selector) => {
+                if (selector === ".history-filter") {
+                    return filters;
+                }
+                return [];
+            };
+            state.recognitionSessions = [
+                {
+                    id: 1,
+                    mode: "existing_box",
+                    filename: "running.jpg",
+                    status: "running",
+                    verification_status: "idle",
+                    created_at: "2026-05-14T10:00:00Z",
+                },
+                {
+                    id: 2,
+                    mode: "auto_template_box",
+                    filename: "done.jpg",
+                    status: "succeeded",
+                    verification_status: "succeeded",
+                    created_at: "2026-05-14T09:00:00Z",
+                },
+                {
+                    id: 3,
+                    mode: "new_box",
+                    filename: "failed.jpg",
+                    status: "failed",
+                    verification_status: "failed",
+                    created_at: "2026-05-14T08:00:00Z",
+                },
+            ];
+            renderRecognitionSessionList();
+            const allCount = count.textContent;
+            const allHtml = list.innerHTML;
+            setRecognitionHistoryFilter("active");
+            const activeCount = count.textContent;
+            const activeHtml = list.innerHTML;
+            return {
+                allCount,
+                allHtml,
+                activeCount,
+                activeHtml,
+                activeClass: filters[1].className,
+            };
+        })()
+        """
+    )
+
+    assert result["allCount"] == "3/3 条"
+    assert "delete-recognition-session" in result["allHtml"]
+    assert result["activeCount"] == "1/3 条"
+    assert "running.jpg" in result["activeHtml"]
+    assert "done.jpg" not in result["activeHtml"]
+    assert "active" in result["activeClass"]
 
 
 def test_login_asset_is_served() -> None:

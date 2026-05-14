@@ -63,6 +63,7 @@ const ACTION_BUSY_TEXT = {
     "verify-selected-components": "搜索中...",
     "refresh-recognition-sessions": "刷新中...",
     "open-recognition-session": "加载中...",
+    "delete-recognition-session": "删除中...",
     "recognize-template-layout": "识别中...",
     "delete-component": "删除中...",
     "delete-template": "删除中...",
@@ -152,6 +153,7 @@ const state = {
     matchedTemplateId: null,
     lastRecognition: null,
     recognitionSessions: [],
+    recognitionHistoryFilter: "all",
     activeRecognitionSessionId: readActiveRecognitionSessionId(),
     loadedRecognitionSessionId: null,
     recognitionSessionPollTimer: null,
@@ -932,7 +934,7 @@ async function refreshSearchProviders() {
 }
 
 async function refreshRecognitionSessions() {
-    state.recognitionSessions = await apiRequest("/ai/recognition_sessions?limit=30");
+    state.recognitionSessions = await apiRequest("/ai/recognition_sessions?limit=50");
     renderRecognitionSessionList();
     return state.recognitionSessions;
 }
@@ -1994,6 +1996,10 @@ function getLayoutCellPosition(cell) {
     return String(cell?.id || cell?.position_identifier || cell?.label || "");
 }
 
+function getLayoutCellLabel(cell) {
+    return String(cell?.label || cell?.source_label || "");
+}
+
 function getIrregularColumnCount(layoutDefinition, fallbackCount = 1) {
     const cells = getLayoutCells(layoutDefinition);
     const declaredCols = Number(layoutDefinition?.cols || layoutDefinition?.columns || 0);
@@ -2340,31 +2346,70 @@ function renderRecognitionSessionList() {
     if (!list) {
         return;
     }
-    if (!state.recognitionSessions.length) {
-        list.innerHTML = '<div class="empty-panel compact-empty">暂无识别会话。</div>';
+    const filteredSessions = getFilteredRecognitionSessions();
+    const count = q("#recognition-history-count");
+    if (count) {
+        count.textContent = `${filteredSessions.length}/${state.recognitionSessions.length} 条`;
+    }
+    qa(".history-filter").forEach((button) => {
+        button.classList.toggle(
+            "active",
+            button.dataset.filter === state.recognitionHistoryFilter,
+        );
+    });
+    if (!filteredSessions.length) {
+        list.innerHTML = '<div class="empty-panel compact-empty">当前筛选下没有识别会话。</div>';
         return;
     }
-    list.innerHTML = state.recognitionSessions.map((session) => {
+    list.innerHTML = filteredSessions.map((session) => {
         const active = session.id === state.activeRecognitionSessionId ? " active" : "";
         const title = [
             getRecognitionSessionModeLabel(session.mode),
             session.filename || `会话 #${session.id}`,
         ].filter(Boolean).join(" · ");
-        const meta = [
-            formatRecognitionSessionTime(session.created_at),
-            getRecognitionSessionStatusLabel(session),
-            getRecognitionSessionVerificationLabel(session),
-        ].filter(Boolean).join(" · ");
+        const meta = formatRecognitionSessionTime(session.created_at);
+        const statusLabel = getRecognitionSessionStatusLabel(session);
+        const verificationLabel = getRecognitionSessionVerificationLabel(session);
+        const deleteDisabled = isRecognitionSessionFinished(session) ? "" : " disabled";
         return `
             <article class="recognition-session-card${active}">
                 <div class="recognition-session-main">
                     <div class="recognition-session-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
                     <div class="recognition-session-meta">${escapeHtml(meta)}</div>
+                    <div class="recognition-session-status">
+                        <span class="session-badge status-${escapeHtml(session.status || "unknown")}">${escapeHtml(statusLabel)}</span>
+                        ${verificationLabel ? `<span class="session-badge verification-${escapeHtml(session.verification_status || "unknown")}">${escapeHtml(verificationLabel)}</span>` : ""}
+                    </div>
                 </div>
-                <button class="small-button" type="button" data-action="open-recognition-session" data-id="${session.id}">打开</button>
+                <div class="recognition-session-actions">
+                    <button class="small-button" type="button" data-action="open-recognition-session" data-id="${session.id}">打开</button>
+                    <button class="small-button danger-button" type="button" data-action="delete-recognition-session" data-id="${session.id}"${deleteDisabled}>删除</button>
+                </div>
             </article>
         `;
     }).join("");
+}
+
+function getFilteredRecognitionSessions() {
+    if (state.recognitionHistoryFilter === "active") {
+        return state.recognitionSessions.filter((session) => {
+            return !isRecognitionSessionFinished(session);
+        });
+    }
+    if (state.recognitionHistoryFilter === "succeeded") {
+        return state.recognitionSessions.filter((session) => session.status === "succeeded");
+    }
+    if (state.recognitionHistoryFilter === "failed") {
+        return state.recognitionSessions.filter((session) => session.status === "failed");
+    }
+    return state.recognitionSessions;
+}
+
+function setRecognitionHistoryFilter(filter) {
+    state.recognitionHistoryFilter = ["all", "active", "succeeded", "failed"].includes(filter)
+        ? filter
+        : "all";
+    renderRecognitionSessionList();
 }
 
 function getRecognitionSessionModeLabel(mode) {
@@ -2416,6 +2461,25 @@ function setActiveRecognitionSessionId(sessionId) {
 async function openRecognitionSession(sessionId) {
     const session = await apiRequest(`/ai/recognition_sessions/${sessionId}`);
     activateRecognitionSession(session, {fromHistory: true});
+}
+
+async function deleteRecognitionSession(sessionId) {
+    const session = state.recognitionSessions.find((item) => item.id === sessionId);
+    const label = session?.filename || `#${sessionId}`;
+    if (!window.confirm(`确定删除识别历史“${label}”吗？已打开的结果不会被清空。`)) {
+        return;
+    }
+    await apiRequest(`/ai/recognition_sessions/${sessionId}`, {method: "DELETE"});
+    state.recognitionSessions = state.recognitionSessions.filter((item) => {
+        return item.id !== sessionId;
+    });
+    if (state.activeRecognitionSessionId === sessionId) {
+        setActiveRecognitionSessionId(null);
+        stopRecognitionSessionPolling();
+    } else {
+        renderRecognitionSessionList();
+    }
+    showToast("识别历史已删除");
 }
 
 function activateRecognitionSession(session, options = {}) {
@@ -2907,6 +2971,7 @@ function prepareRecognitionCellsFromParsed(parsed) {
                     {
                         ...(rawCell || {is_empty: true}),
                         position_identifier: getLayoutCellPosition(layoutCell),
+                        layout_label: getLayoutCellLabel(layoutCell),
                     },
                     index,
                 );
@@ -2922,6 +2987,7 @@ function findRecognitionCellForLayout(rawCells, layoutCell, index) {
         layoutCell.source_id,
         layoutCell.source_position,
         layoutCell.original_id,
+        layoutCell.label,
         getLayoutCellPosition(layoutCell),
     ].filter(Boolean).map((item) => String(item));
     return rawCells.find((cell) => {
@@ -2942,6 +3008,7 @@ function normalizeRecognitionCell(cell, index) {
         confidence: cell.confidence ?? null,
         notes: stripVerificationPhrases(cell.notes || ""),
         verification_warning: warning,
+        layout_label: cell.layout_label || "",
         stock_mode: cell.stock_mode || "fuzzy",
         quantity_exact: cell.quantity_exact ?? null,
         quantity_fuzzy: cell.quantity_fuzzy || "未知",
@@ -2993,6 +3060,7 @@ function renderRecognitionCards() {
     }
     const renderedCells = [];
     positions.forEach((position, fallbackIndex) => {
+        const layoutCell = useIrregularMap ? layoutCellsByPosition.get(position) : null;
         const cell = cellsByPosition.get(position) || normalizeRecognitionCell({
             position_identifier: position,
             is_empty: true,
@@ -3000,13 +3068,14 @@ function renderRecognitionCards() {
             tags: [],
             attributes: {},
             display_attribute: "",
+            layout_label: getLayoutCellLabel(layoutCell),
             quantity_fuzzy: "未知",
         }, state.recognitionCells.length + fallbackIndex);
+        if (layoutCell && !cell.layout_label) {
+            cell.layout_label = getLayoutCellLabel(layoutCell);
+        }
         renderedCells.push(cell);
-        const card = createRecognitionCard(
-            cell,
-            useIrregularMap ? layoutCellsByPosition.get(position) : null,
-        );
+        const card = createRecognitionCard(cell, layoutCell);
         grid.append(card);
     });
     state.recognitionCells = renderedCells;
@@ -3074,12 +3143,7 @@ function createRecognitionDisplayHtml(cell) {
         ? `<p class="warning-line">${escapeHtml(cell.verification_warning)}</p>`
         : "";
     return `
-        <div class="card-head">
-            <span class="position-pill">${escapeHtml(cell.position_identifier || "单图")}</span>
-            <label class="verify-check" title="勾选后可联网搜索核对">
-                <input data-field="verify_selected" type="checkbox" aria-label="联网搜索核对" ${cell.verify_selected ? "checked" : ""}>
-            </label>
-        </div>
+        ${createRecognitionCardHeadHtml(cell)}
         <div class="display-name" title="${escapeHtml(cell.name || "")}">${escapeHtml(displayTitle)}</div>
         <div class="chip-row">${tagsHtml || '<span class="muted-text">无标签</span>'}</div>
         <div class="attribute-grid">${attributesHtml || '<span class="muted-text">无结构化属性</span>'}</div>
@@ -3093,8 +3157,8 @@ function getRecognitionCellDisplayTitle(cell) {
     if (cell.is_empty) {
         return "空格";
     }
-    return getAttributeDisplayText(cell.attributes || {}, cell.display_attribute || "")
-        || cell.name
+    return cell.name
+        || getAttributeDisplayText(cell.attributes || {}, cell.display_attribute || "")
         || "未命名";
 }
 
@@ -3103,12 +3167,7 @@ function createRecognitionEditHtml(cell) {
     const quantityValue = cell.stock_mode === "exact" ? "custom" : (cell.quantity_fuzzy || "未知");
     const exactValue = cell.quantity_exact ?? "";
     return `
-        <div class="card-head">
-            <span class="position-pill">${escapeHtml(cell.position_identifier || "单图")}</span>
-            <label class="verify-check" title="勾选后可联网搜索核对">
-                <input data-field="verify_selected" type="checkbox" aria-label="联网搜索核对" ${cell.verify_selected ? "checked" : ""}>
-            </label>
-        </div>
+        ${createRecognitionCardHeadHtml(cell)}
         <label>名称<input data-field="name" type="text" value="${escapeHtml(cell.name || "")}"></label>
         <label>标签<input data-field="tags" type="text" value="${escapeHtml(tagsText)}" placeholder="IC/电源芯片, 贴片"></label>
         <div class="attribute-editor" data-role="attribute-editor">
@@ -3131,6 +3190,33 @@ function createRecognitionEditHtml(cell) {
         </div>
         <label>备注<input data-field="notes" type="text" value="${escapeHtml(cell.notes || "")}"></label>
     `;
+}
+
+function createRecognitionCardHeadHtml(cell) {
+    const position = cell.position_identifier || "单图";
+    const label = getRecognitionCellLayoutLabel(cell);
+    const labelHtml = label
+        ? `<span class="layout-label-pill" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`
+        : "";
+    return `
+        <div class="card-head">
+            <div class="card-head-labels">
+                <span class="position-pill">${escapeHtml(position)}</span>
+                ${labelHtml}
+            </div>
+            <label class="verify-check" title="勾选后可联网搜索核对">
+                <input data-field="verify_selected" type="checkbox" aria-label="联网搜索核对" ${cell.verify_selected ? "checked" : ""}>
+            </label>
+        </div>
+    `;
+}
+
+function getRecognitionCellLayoutLabel(cell) {
+    const label = String(cell.layout_label || "").trim();
+    if (!label || label === String(cell.position_identifier || "")) {
+        return "";
+    }
+    return label;
 }
 
 function renderAttributeEditor(attributes) {
@@ -3245,6 +3331,7 @@ function syncRecognitionCellsFromEditor() {
             ),
             notes: card.querySelector('[data-field="notes"]').value.trim() || null,
             verification_warning: existingCell?.verification_warning || "",
+            layout_label: existingCell?.layout_label || "",
             stock_mode: quantityMode === "custom" ? "exact" : "fuzzy",
             quantity_exact: quantityMode === "custom" ? exactValue : null,
             quantity_fuzzy: quantityMode === "custom" ? null : quantityMode,
@@ -4118,8 +4205,14 @@ async function handleActionClick(event) {
         if (action === "refresh-recognition-sessions") {
             await refreshRecognitionSessions();
         }
+        if (action === "set-recognition-history-filter") {
+            setRecognitionHistoryFilter(target.dataset.filter);
+        }
         if (action === "open-recognition-session") {
             await openRecognitionSession(Number(id));
+        }
+        if (action === "delete-recognition-session") {
+            await deleteRecognitionSession(Number(id));
         }
         if (action === "toggle-recognition-verification") {
             toggleRecognitionVerification();

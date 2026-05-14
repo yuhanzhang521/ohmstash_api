@@ -23,9 +23,14 @@ SMD_PACKAGE_PATTERN = re.compile(
     r"soic-[0-9a-z-]+|tssop-[0-9a-z-]+|msop-[0-9a-z-]+)$",
     re.IGNORECASE,
 )
-MODEL_TOKEN_PATTERN = re.compile(r"\b[A-Z]{1,}[A-Z0-9._/-]*\d[A-Z0-9._/-]*\b")
+MODEL_TOKEN_PATTERN = re.compile(
+    r"[A-Z]{1,}[A-Z0-9._/-]*\d[A-Z0-9._/-]*"
+)
 VOLTAGE_PATTERN = re.compile(r"\b\d+(?:\.\d+)?\s*V\b", re.IGNORECASE)
 LEADING_CODE_PATTERN = re.compile(r"^[A-Za-z0-9._/-]{2,}$")
+FUNCTION_MODEL_PREFIX_PHRASES = ("舵机",)
+FUNCTION_TYPE_ATTRIBUTE_KEYS = ("类型", "功能", "器件类型")
+VOLTAGE_ATTRIBUTE_KEYS = ("供电电压", "工作电压", "额定电压", "电压", "Voltage")
 FUNCTION_PHRASES = (
     "薄膜压力传感器",
     "压力传感器",
@@ -106,23 +111,47 @@ def normalize_recognized_cell_payload(payload: Dict[str, Any]) -> Dict[str, Any]
 
     tags = _clean_texts(normalized.get("tags") or [])
     attributes = normalized.get("attributes")
-    attribute_map = attributes if isinstance(attributes, dict) else {}
-    source_text = _build_source_text(name, tags, attribute_map, normalized.get("notes"))
+    attribute_map = dict(attributes) if isinstance(attributes, dict) else {}
+    normalized["attributes"] = attribute_map
+    source_text = _build_source_text(
+        name,
+        tags,
+        attribute_map,
+        normalized.get("notes"),
+    )
 
     passive_name = _build_passive_name(name, source_text, attribute_map)
     if passive_name:
         normalized["name"] = passive_name
+        _ensure_passive_attributes(attribute_map, passive_name, source_text)
         return normalized
 
     if _is_integrated_circuit(source_text) and not _is_functional_component(source_text):
         model_name = _extract_model_name(name, attribute_map)
         if model_name:
             normalized["name"] = model_name
+            _ensure_attribute_value(
+                attribute_map,
+                MODEL_ATTRIBUTE_KEYS,
+                "型号",
+                model_name,
+            )
             return normalized
 
-    functional_name = _build_functional_name(name, source_text, attribute_map)
+    phrase = _extract_function_phrase(source_text)
+    functional_name = _build_functional_name(
+        name,
+        source_text,
+        attribute_map,
+        phrase=phrase,
+    )
     if functional_name:
         normalized["name"] = functional_name
+        _ensure_functional_attributes(
+            attribute_map,
+            phrase=phrase or _extract_function_phrase(functional_name),
+            source_name=name,
+        )
 
     return normalized
 
@@ -177,7 +206,11 @@ def _extract_smd_package(
 
 def _is_integrated_circuit(source_text: str) -> bool:
     text = source_text.lower()
-    return "芯片" in source_text or "集成电路" in source_text or re.search(r"\bic\b", text) is not None
+    return (
+        "芯片" in source_text
+        or "集成电路" in source_text
+        or re.search(r"\bic\b", text) is not None
+    )
 
 
 def _is_functional_component(source_text: str) -> bool:
@@ -203,19 +236,79 @@ def _build_functional_name(
     name: str,
     source_text: str,
     attributes: Dict[str, Any],
+    *,
+    phrase: Optional[str] = None,
 ) -> Optional[str]:
-    phrase = _extract_function_phrase(source_text)
     if not phrase:
         return None
 
+    model = _extract_model_name(name, attributes)
+    if phrase in FUNCTION_MODEL_PREFIX_PHRASES and model:
+        return f"{model}{phrase}"
+
     voltage = _extract_voltage(name, attributes)
     if "风扇" in phrase and voltage:
-        return f"{voltage} {phrase}"
+        return f"{voltage}{phrase}"
 
     if phrase in name:
         return _strip_nonessential_prefix(name, phrase)
 
     return phrase
+
+
+def _ensure_passive_attributes(
+    attributes: Dict[str, Any],
+    passive_name: str,
+    source_text: str,
+) -> None:
+    for terms, value_keys in PASSIVE_RULES:
+        if not any(term.lower() in source_text.lower() for term in terms):
+            continue
+        value = _extract_passive_value_from_name(passive_name)
+        if value:
+            _ensure_attribute_value(attributes, value_keys, value_keys[0], value)
+        package = _extract_smd_package(passive_name, attributes, source_text)
+        if package:
+            _ensure_attribute_value(
+                attributes,
+                PACKAGE_ATTRIBUTE_KEYS,
+                "封装",
+                package,
+            )
+        return
+
+
+def _ensure_functional_attributes(
+    attributes: Dict[str, Any],
+    *,
+    phrase: Optional[str],
+    source_name: str,
+) -> None:
+    if phrase:
+        _ensure_attribute_value(
+            attributes,
+            FUNCTION_TYPE_ATTRIBUTE_KEYS,
+            "类型",
+            phrase,
+        )
+
+    model = _extract_model_name(source_name, attributes)
+    if phrase in FUNCTION_MODEL_PREFIX_PHRASES and model:
+        _ensure_attribute_value(
+            attributes,
+            MODEL_ATTRIBUTE_KEYS,
+            "型号",
+            model,
+        )
+
+    voltage = _extract_voltage(source_name, attributes)
+    if phrase and "风扇" in phrase and voltage:
+        _ensure_attribute_value(
+            attributes,
+            VOLTAGE_ATTRIBUTE_KEYS,
+            "供电电压",
+            voltage,
+        )
 
 
 def _extract_function_phrase(source_text: str) -> Optional[str]:
@@ -248,6 +341,19 @@ def _extract_voltage(name: str, attributes: Dict[str, Any]) -> str:
         if match:
             return match.group(0).replace(" ", "").upper()
     return ""
+
+
+def _ensure_attribute_value(
+    attributes: Dict[str, Any],
+    keys: Iterable[str],
+    default_key: str,
+    value: str,
+) -> None:
+    if not value:
+        return
+    if _first_attribute_value(attributes, keys):
+        return
+    attributes[default_key] = value
 
 
 def _first_attribute_value(

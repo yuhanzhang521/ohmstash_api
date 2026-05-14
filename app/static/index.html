@@ -157,8 +157,17 @@
                         </form>
                         <div class="recognition-history">
                             <div class="recognition-history-heading">
-                                <h4>识别历史</h4>
+                                <div>
+                                    <h4>识别历史</h4>
+                                    <span class="history-count" id="recognition-history-count">0 条</span>
+                                </div>
                                 <button class="secondary-button" type="button" data-action="refresh-recognition-sessions">刷新</button>
+                            </div>
+                            <div class="recognition-history-filters" role="tablist" aria-label="识别历史筛选">
+                                <button class="history-filter active" type="button" data-action="set-recognition-history-filter" data-filter="all">全部</button>
+                                <button class="history-filter" type="button" data-action="set-recognition-history-filter" data-filter="active">进行中</button>
+                                <button class="history-filter" type="button" data-action="set-recognition-history-filter" data-filter="succeeded">完成</button>
+                                <button class="history-filter" type="button" data-action="set-recognition-history-filter" data-filter="failed">失败</button>
                             </div>
                             <div class="recognition-session-list" id="recognition-session-list">
                                 <div class="empty-panel compact-empty">暂无识别会话。</div>

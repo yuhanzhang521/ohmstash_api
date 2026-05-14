@@ -561,12 +561,15 @@ textarea:focus {
 
 .recognition-history {
     display: grid;
-    gap: 8px;
+    gap: 9px;
     margin-top: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-soft);
+    padding: 10px;
 }
 
-.recognition-history-heading,
-.recognition-session-card {
+.recognition-history-heading {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -578,16 +581,53 @@ textarea:focus {
     font-size: 14px;
 }
 
+.history-count {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.recognition-history-filters {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+}
+
+.history-filter {
+    min-height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--control-bg);
+    color: var(--muted);
+    padding: 4px 5px;
+    font-size: 12px;
+}
+
+.history-filter.active {
+    border-color: var(--accent-border);
+    background: var(--accent-tint);
+    color: var(--accent-strong);
+    font-weight: 700;
+}
+
 .recognition-session-list {
     display: grid;
-    gap: 8px;
+    max-height: 300px;
+    overflow: auto;
+    gap: 6px;
+    padding-right: 2px;
 }
 
 .recognition-session-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: 7px;
     background: var(--control-bg);
-    padding: 8px;
+    padding: 7px;
 }
 
 .recognition-session-card.active {
@@ -597,7 +637,7 @@ textarea:focus {
 
 .recognition-session-main {
     display: grid;
-    gap: 3px;
+    gap: 4px;
     min-width: 0;
 }
 
@@ -616,6 +656,53 @@ textarea:focus {
 .recognition-session-meta {
     color: var(--muted);
     font-size: 12px;
+}
+
+.recognition-session-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.session-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface-soft);
+    color: var(--muted);
+    padding: 1px 6px;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.session-badge.status-running,
+.session-badge.status-queued {
+    border-color: rgb(37 99 235 / 24%);
+    background: rgb(37 99 235 / 10%);
+    color: var(--blue);
+}
+
+.session-badge.status-succeeded,
+.session-badge.verification-succeeded {
+    border-color: var(--accent-border);
+    background: var(--accent-tint);
+    color: var(--accent-strong);
+}
+
+.session-badge.status-failed,
+.session-badge.verification-failed {
+    border-color: rgb(180 35 24 / 28%);
+    background: rgb(180 35 24 / 9%);
+    color: var(--danger);
+}
+
+.recognition-session-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 5px;
 }
 
 .image-preview {
@@ -695,7 +782,15 @@ textarea:focus {
     min-width: 0;
 }
 
+.card-head-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+}
+
 .position-pill,
+.layout-label-pill,
 .tag-chip {
     display: inline-flex;
     align-items: center;
@@ -713,6 +808,12 @@ textarea:focus {
     background: var(--brand-bg);
     color: var(--brand-text);
     font-weight: 700;
+}
+
+.layout-label-pill {
+    border: 1px solid var(--line);
+    background: var(--surface-soft);
+    color: var(--muted);
 }
 
 .verify-check {
@@ -1593,6 +1694,22 @@ textarea:focus {
     .form-actions {
         align-items: stretch;
         flex-direction: column;
+    }
+
+    .recognition-session-list {
+        max-height: 230px;
+    }
+
+    .recognition-session-card {
+        grid-template-columns: 1fr;
+    }
+
+    .recognition-session-actions {
+        justify-content: stretch;
+    }
+
+    .recognition-session-actions .small-button {
+        flex: 1 1 0;
     }
 
     .scanner-panel {

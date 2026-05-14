@@ -11,6 +11,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Response,
     UploadFile,
 )
 from sqlalchemy.orm import Session
@@ -1639,6 +1640,28 @@ def read_recognition_session(
         session_id=session_id,
         principal=principal,
     )
+
+
+@router.delete("/recognition_sessions/{session_id}", status_code=204)
+def delete_recognition_session(
+    *,
+    db: Session = Depends(deps.get_db),
+    principal: auth.AuthPrincipal = Depends(deps.get_current_principal),
+    session_id: int,
+) -> Response:
+    recognition_session = _get_owned_recognition_session(
+        db=db,
+        session_id=session_id,
+        principal=principal,
+    )
+    if recognition_session.status not in {"succeeded", "failed"}:
+        raise HTTPException(
+            status_code=400,
+            detail="正在识别的会话暂不能删除",
+        )
+    db.delete(recognition_session)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/recognition_prompt")
