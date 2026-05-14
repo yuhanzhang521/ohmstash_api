@@ -653,6 +653,7 @@ def _build_verification_prompt(
         "如果搜索摘要不足以确认某个字段，请保留原值，不要编造。\n"
         "如果搜索结果明显指向另一个标准型号，说明原始识别可能有误，请把 name 和 attributes.型号 更新为可确认的标准型号；"
         "例如原始 IPS5450 但资料主要指向 TPS5450 时，应改为 TPS5450。\n"
+        f"{recognition_prompt.COMPONENT_NAME_RULE_TEXT}\n"
         "display_attribute 必须保留或更新为 attributes 中最适合缩略显示的属性名，"
         "阻容感优先使用阻值、容值或电感值，芯片类通常使用型号。\n"
         "不要把“未能从摘要唯一确认”“不同厂商版本不一致”“待确认”等不确定性说明写进 attributes 的值里，"

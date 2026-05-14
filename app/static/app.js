@@ -1,5 +1,8 @@
 const API_BASE = "/api/v1";
 const THEME_STORAGE_KEY = "ohmstash_theme";
+const RECOGNITION_DRAFT_STORAGE_KEY = "ohmstash_recognition_draft";
+const RECOGNITION_DRAFT_VERSION = 1;
+const AI_PENDING_UNLOAD_MESSAGE = "AI 正在处理，请保持页面打开；离开页面会丢失本次未返回的结果。";
 const THEME_LABELS = {
     system: "跟随系统",
     light: "浅色",
@@ -145,6 +148,7 @@ const state = {
     recognizedTemplate: null,
     matchedTemplateId: null,
     lastRecognition: null,
+    longRunningAiRequestCount: 0,
     previewUrls: {},
     templateNameAuto: true,
     manageMode: "boxes",
@@ -702,6 +706,48 @@ function buildRecognitionNetworkRetryOptions(statusCallback) {
             );
         },
     };
+}
+
+function readLocalStorageJson(key) {
+    try {
+        const rawValue = window.localStorage.getItem(key);
+        return rawValue ? JSON.parse(rawValue) : null;
+    } catch {
+        return null;
+    }
+}
+
+function writeLocalStorageJson(key, value) {
+    try {
+        window.localStorage.setItem(key, JSON.stringify(value));
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function removeLocalStorageItem(key) {
+    try {
+        window.localStorage.removeItem(key);
+    } catch {
+    }
+}
+
+function startLongRunningAiRequest() {
+    state.longRunningAiRequestCount += 1;
+}
+
+function finishLongRunningAiRequest() {
+    state.longRunningAiRequestCount = Math.max(state.longRunningAiRequestCount - 1, 0);
+}
+
+function warnBeforeUnloadDuringAi(event) {
+    if (state.longRunningAiRequestCount <= 0) {
+        return undefined;
+    }
+    event.preventDefault();
+    event.returnValue = AI_PENDING_UNLOAD_MESSAGE;
+    return AI_PENDING_UNLOAD_MESSAGE;
 }
 
 async function parseResponse(response) {
@@ -2265,6 +2311,236 @@ function setRecognitionStatus(message, isError = false) {
     viewer.innerHTML = `<div class="empty-panel ${isError ? "error" : ""}">${escapeHtml(message)}</div>`;
 }
 
+function resetRecognitionResultState() {
+    state.recognitionCells = [];
+    state.recognitionEditing = false;
+    state.recognizedBoxName = "";
+    state.recognizedBoxReadableId = "";
+    state.recognizedTemplate = null;
+    state.matchedTemplateId = null;
+    state.lastRecognition = null;
+    setDraftFieldValue("#recognized-box-name", "");
+    setDraftFieldValue("#recognized-box-readable-id", "");
+    setDraftFieldValue("#recognized-template-name", "");
+    setDraftFieldValue("#recognized-template-rows", "1");
+    setDraftFieldValue("#recognized-template-cols", "1");
+    setDraftFieldValue("#recognized-template-layout-json", "");
+    updateRecognitionEditButton();
+    updateRecognizedFieldsVisibility();
+}
+
+function discardRecognitionResult(message) {
+    clearRecognitionDraft();
+    resetRecognitionResultState();
+    q("#recognition-summary").textContent = "暂无结果";
+    q("#ai-result-viewer").innerHTML = `<div class="empty-panel">${escapeHtml(message)}</div>`;
+}
+
+function clearRecognitionDraft() {
+    removeLocalStorageItem(RECOGNITION_DRAFT_STORAGE_KEY);
+}
+
+function saveRecognitionDraftIfAvailable() {
+    if (!state.recognitionCells.length) {
+        return;
+    }
+    saveRecognitionDraftFromCurrentState();
+}
+
+function saveRecognitionDraftFromCurrentState() {
+    const draft = buildRecognitionDraftFromCurrentState();
+    if (!draft) {
+        return false;
+    }
+    return writeLocalStorageJson(RECOGNITION_DRAFT_STORAGE_KEY, draft);
+}
+
+function buildRecognitionDraftFromCurrentState() {
+    const cells = getRecognitionDraftCells();
+    if (!cells.length) {
+        return null;
+    }
+    const mode = q("#recognition-mode")?.value || state.recognitionMode || "existing_box";
+    const recognizedTemplate = mode === "auto_template_box"
+        ? readRecognitionDraftTemplate()
+        : state.recognizedTemplate;
+    return {
+        version: RECOGNITION_DRAFT_VERSION,
+        username: state.currentUser?.username || "",
+        updated_at: new Date().toISOString(),
+        mode,
+        box_id: q("#recognition-box-id")?.value || "",
+        template_id: q("#recognition-template-id")?.value || "",
+        layout_type: q("#recognition-layout-type")?.value || "grid",
+        overwrite_existing: Boolean(q("#recognition-overwrite-existing")?.checked),
+        additional_prompt: q("#recognition-prompt")?.value || "",
+        search_provider_config_id: q("#verification-search-provider-id")?.value || "",
+        recognized_box_name: q("#recognized-box-name")?.value.trim() || state.recognizedBoxName || "",
+        recognized_box_readable_id: q("#recognized-box-readable-id")?.value.trim()
+            || state.recognizedBoxReadableId
+            || "",
+        recognized_template: recognizedTemplate,
+        recognized_template_form: readRecognitionDraftTemplateForm(),
+        matched_template_id: state.matchedTemplateId || null,
+        last_recognition: state.lastRecognition
+            ? {
+                filename: state.lastRecognition.filename || "",
+                latency_ms: state.lastRecognition.latency_ms ?? null,
+                config_id: state.lastRecognition.config_id ?? null,
+                content_type: state.lastRecognition.content_type || "",
+            }
+            : null,
+        cells,
+    };
+}
+
+function getRecognitionDraftCells() {
+    if (state.recognitionEditing) {
+        try {
+            return syncRecognitionCellsFromEditor().map((cell, index) => {
+                return normalizeRecognitionCell(cell, index);
+            });
+        } catch {
+            return state.recognitionCells.map((cell, index) => normalizeRecognitionCell(cell, index));
+        }
+    }
+    syncDisplayVerificationSelection();
+    return state.recognitionCells.map((cell, index) => normalizeRecognitionCell(cell, index));
+}
+
+function readRecognitionDraftTemplate() {
+    try {
+        return readRecognizedTemplateFields();
+    } catch {
+        return state.recognizedTemplate;
+    }
+}
+
+function readRecognitionDraftTemplateForm() {
+    return {
+        name: q("#recognized-template-name")?.value || "",
+        rows: q("#recognized-template-rows")?.value || "",
+        cols: q("#recognized-template-cols")?.value || "",
+        layout_json: q("#recognized-template-layout-json")?.value || "",
+    };
+}
+
+function restoreRecognitionDraft() {
+    const draft = readLocalStorageJson(RECOGNITION_DRAFT_STORAGE_KEY);
+    if (!isRestorableRecognitionDraft(draft)) {
+        return false;
+    }
+
+    const mode = normalizeRecognitionDraftMode(draft.mode);
+    q("#recognition-mode").value = mode;
+    state.recognitionMode = mode;
+    setDraftFieldValue("#recognition-box-id", draft.box_id);
+    setDraftFieldValue("#recognition-template-id", draft.template_id);
+    setDraftFieldValue("#recognition-layout-type", draft.layout_type || "grid");
+    if (q("#recognition-overwrite-existing")) {
+        q("#recognition-overwrite-existing").checked = Boolean(draft.overwrite_existing);
+    }
+    setDraftFieldValue("#recognition-prompt", draft.additional_prompt);
+    setDraftFieldValue("#verification-search-provider-id", draft.search_provider_config_id);
+
+    state.recognizedBoxName = draft.recognized_box_name || "";
+    state.recognizedBoxReadableId = draft.recognized_box_readable_id || "";
+    setDraftFieldValue("#recognized-box-name", state.recognizedBoxName);
+    setDraftFieldValue("#recognized-box-readable-id", state.recognizedBoxReadableId);
+    state.recognizedTemplate = mode === "auto_template_box"
+        ? normalizeRecognitionDraftTemplate(draft)
+        : null;
+    state.matchedTemplateId = draft.matched_template_id || null;
+    state.lastRecognition = draft.last_recognition || null;
+    state.recognitionEditing = false;
+    state.recognitionCells = draft.cells.map((cell, index) => normalizeRecognitionCell(cell, index));
+
+    if (state.recognizedTemplate) {
+        fillRecognizedTemplateFields(state.recognizedTemplate);
+    } else {
+        applyRecognitionDraftTemplateForm(draft.recognized_template_form);
+    }
+
+    updateRecognitionModeFields();
+    updateRecognitionEditButton();
+    updateRecognizedFieldsVisibility();
+    renderRecognitionCards();
+    renderRecognitionDraftSummary(draft);
+    return true;
+}
+
+function isRestorableRecognitionDraft(draft) {
+    if (!draft || draft.version !== RECOGNITION_DRAFT_VERSION || !Array.isArray(draft.cells)) {
+        return false;
+    }
+    if (!draft.cells.length) {
+        return false;
+    }
+    const draftUsername = String(draft.username || "");
+    const currentUsername = String(state.currentUser?.username || "");
+    return !draftUsername || !currentUsername || draftUsername === currentUsername;
+}
+
+function normalizeRecognitionDraftMode(mode) {
+    return ["existing_box", "new_box", "auto_template_box"].includes(mode)
+        ? mode
+        : "existing_box";
+}
+
+function normalizeRecognitionDraftTemplate(draft) {
+    if (draft.recognized_template?.layout_type) {
+        return draft.recognized_template;
+    }
+    const form = draft.recognized_template_form || {};
+    const layoutType = draft.layout_type === "irregular" ? "irregular" : "grid";
+    if (layoutType === "grid") {
+        const rows = Number(form.rows || 1);
+        const cols = Number(form.cols || 1);
+        return {
+            name: form.name || buildStructureTemplateName("grid", {rows, cols}),
+            layout_type: "grid",
+            layout_definition: {rows, cols},
+        };
+    }
+    let layoutDefinition = [];
+    try {
+        layoutDefinition = parseIrregularLayout(form.layout_json || "");
+    } catch {
+        layoutDefinition = [];
+    }
+    return {
+        name: form.name || buildStructureTemplateName("irregular", layoutDefinition),
+        layout_type: "irregular",
+        layout_definition: layoutDefinition,
+    };
+}
+
+function applyRecognitionDraftTemplateForm(form = {}) {
+    setDraftFieldValue("#recognized-template-name", form.name);
+    setDraftFieldValue("#recognized-template-rows", form.rows || 1);
+    setDraftFieldValue("#recognized-template-cols", form.cols || 1);
+    setDraftFieldValue("#recognized-template-layout-json", form.layout_json);
+}
+
+function setDraftFieldValue(selector, value) {
+    const element = q(selector);
+    if (!element || value === undefined || value === null) {
+        return;
+    }
+    element.value = String(value);
+}
+
+function renderRecognitionDraftSummary(draft) {
+    const updatedAt = draft.updated_at ? new Date(draft.updated_at) : null;
+    const updatedText = updatedAt && !Number.isNaN(updatedAt.getTime())
+        ? updatedAt.toLocaleString()
+        : "上次";
+    const filename = draft.last_recognition?.filename
+        ? `${draft.last_recognition.filename} · `
+        : "";
+    q("#recognition-summary").textContent = `${filename}已恢复未入库结果 · ${updatedText}`;
+}
+
 function updateRecognitionModeFields() {
     const mode = q("#recognition-mode").value;
     q("#recognition-box-line").classList.toggle("hidden", mode !== "existing_box");
@@ -2311,6 +2587,7 @@ function toggleRecognitionEditMode() {
     if (state.recognitionCells.length) {
         renderRecognitionCards();
     }
+    saveRecognitionDraftIfAvailable();
 }
 
 function renderRecognitionResult(result) {
@@ -2339,6 +2616,7 @@ function renderRecognitionResult(result) {
     maybeReuseExistingTemplate();
     updateRecognizedFieldsVisibility();
     renderRecognitionCards();
+    saveRecognitionDraftFromCurrentState();
 }
 
 function maybeReuseExistingTemplate() {
@@ -2809,6 +3087,7 @@ function toggleRecognitionVerification() {
     });
     renderRecognitionCards();
     eventTargetToggleText(shouldSelect);
+    saveRecognitionDraftFromCurrentState();
 }
 
 function eventTargetToggleText(selected) {
@@ -3432,6 +3711,7 @@ async function showBoxMap(boxId) {
 
 function bindEvents() {
     document.addEventListener("click", handleActionClick);
+    window.addEventListener("beforeunload", warnBeforeUnloadDuringAi);
     qa("[data-view]").forEach((button) => {
         button.addEventListener("click", () => setView(button.dataset.view));
     });
@@ -3483,25 +3763,51 @@ function bindEvents() {
     q("#placement-box-id").addEventListener("change", () => {
         renderPlacementSubBoxOptions(Number(q("#placement-box-id").value || 0));
     });
-    q("#recognition-mode").addEventListener("change", updateRecognitionModeFields);
+    q("#recognition-mode").addEventListener("change", () => {
+        updateRecognitionModeFields();
+        saveRecognitionDraftIfAvailable();
+    });
     q("#recognized-template-rows").addEventListener("input", () => {
         renderRecognizedTemplatePreview();
         renderRecognitionCards();
+        saveRecognitionDraftIfAvailable();
     });
     q("#recognized-template-cols").addEventListener("input", () => {
         renderRecognizedTemplatePreview();
         renderRecognitionCards();
+        saveRecognitionDraftIfAvailable();
     });
     q("#ai-result-viewer").addEventListener("change", (event) => {
         const select = event.target.closest('[data-field="quantity_mode"]');
-        if (!select) {
-            return;
+        if (select) {
+            const card = select.closest(".recognition-card");
+            card.querySelector('[data-role="exact-line"]').classList.toggle(
+                "hidden",
+                select.value !== "custom",
+            );
         }
-        const card = select.closest(".recognition-card");
-        card.querySelector('[data-role="exact-line"]').classList.toggle(
-            "hidden",
-            select.value !== "custom",
-        );
+        saveRecognitionDraftIfAvailable();
+    });
+    q("#ai-result-viewer").addEventListener("input", () => {
+        saveRecognitionDraftIfAvailable();
+    });
+    [
+        "#recognition-box-id",
+        "#recognition-template-id",
+        "#recognition-layout-type",
+        "#recognition-overwrite-existing",
+        "#verification-search-provider-id",
+    ].forEach((selector) => {
+        q(selector).addEventListener("change", saveRecognitionDraftIfAvailable);
+    });
+    [
+        "#recognition-prompt",
+        "#recognized-box-name",
+        "#recognized-box-readable-id",
+        "#recognized-template-name",
+        "#recognized-template-layout-json",
+    ].forEach((selector) => {
+        q(selector).addEventListener("input", saveRecognitionDraftIfAvailable);
     });
     q("#template-name").addEventListener("input", () => {
         state.templateNameAuto = q("#template-name").value.trim() === defaultTemplateName();
@@ -3527,6 +3833,7 @@ function bindEvents() {
         if (state.recognitionCells.length) {
             renderRecognitionCards();
         }
+        saveRecognitionDraftIfAvailable();
     });
     ["#manage-query", "#manage-tag-filter", "#manage-attribute-filter"].forEach((selector) => {
         q(selector).addEventListener("input", renderManageView);
@@ -3852,6 +4159,7 @@ async function uploadRecognition(event) {
     setRecognitionBusy(true);
     setRecognitionStatus("正在上传图片并等待 VLM 识别...");
     let wakeLock = null;
+    startLongRunningAiRequest();
     try {
         wakeLock = await requestRecognitionWakeLock();
         const file = q("#recognition-file").files[0];
@@ -3891,6 +4199,8 @@ async function uploadRecognition(event) {
             formData.append("layout_type", q("#recognition-layout-type").value);
             path = "/ai/recognize_box_layout_image";
         }
+        clearRecognitionDraft();
+        resetRecognitionResultState();
         const result = await apiFormRequest(
             path,
             formData,
@@ -3903,6 +4213,7 @@ async function uploadRecognition(event) {
         showToast(error.message);
     } finally {
         releaseRecognitionWakeLock(wakeLock);
+        finishLongRunningAiRequest();
         setRecognitionBusy(false);
     }
 }
@@ -3967,6 +4278,7 @@ async function confirmBoxRecognition() {
     if (result.box_id) {
         showBoxLabel(result.box_id);
     }
+    discardRecognitionResult("本次识别结果已入库。重新上传图片后会生成新的识别结果。");
     showToast(`已入库：${result.created_inventory_items} 条库存`);
 }
 
@@ -3977,15 +4289,21 @@ async function verifySelectedComponents() {
         throw new Error("请先勾选需要联网搜索的器件");
     }
     showToast(`正在联网搜索 ${selectedCells.length} 个器件并让 AI 核对属性...`);
-    const result = await apiRequest("/ai/verify_components", {
-        method: "POST",
-        body: JSON.stringify({
-            items: selectedCells,
-            use_web: true,
-            search_provider_config_id: getSelectedSearchProviderConfigId(),
-            additional_prompt: q("#recognition-prompt").value.trim(),
-        }),
-    });
+    startLongRunningAiRequest();
+    let result;
+    try {
+        result = await apiRequest("/ai/verify_components", {
+            method: "POST",
+            body: JSON.stringify({
+                items: selectedCells,
+                use_web: true,
+                search_provider_config_id: getSelectedSearchProviderConfigId(),
+                additional_prompt: q("#recognition-prompt").value.trim(),
+            }),
+        });
+    } finally {
+        finishLongRunningAiRequest();
+    }
     const verifiedByPosition = new Map(
         result.verified_items.map((cell, index) => [
             cell.position_identifier || selectedCells[index]?.position_identifier,
@@ -3997,6 +4315,7 @@ async function verifySelectedComponents() {
         return verified ? normalizeRecognitionCell({...cell, ...verified}, index) : cell;
     });
     renderRecognitionCards();
+    saveRecognitionDraftFromCurrentState();
     const errorCount = (result.web_contexts || []).filter((context) => {
         return Array.isArray(context.errors) && context.errors.length > 0;
     }).length;
@@ -4015,6 +4334,7 @@ async function recognizeTemplateLayout() {
     setTemplateRecognitionBusy(true);
     showToast("正在识别模板布局...");
     let wakeLock = null;
+    startLongRunningAiRequest();
     try {
         wakeLock = await requestRecognitionWakeLock();
         const uploadFile = await prepareRecognitionUploadFile(file, showToast);
@@ -4042,6 +4362,7 @@ async function recognizeTemplateLayout() {
         showToast("模板识别结果已填入表单");
     } finally {
         releaseRecognitionWakeLock(wakeLock);
+        finishLongRunningAiRequest();
         setTemplateRecognitionBusy(false);
     }
 }
@@ -4386,14 +4707,20 @@ async function loadPlacementRecommendations() {
     if (!component) {
         throw new Error("请先选择要入库的器件");
     }
-    const result = await apiRequest("/search/recommend_locations", {
-        method: "POST",
-        body: JSON.stringify({
-            text: [component.name, component.description || ""].join(" ").trim(),
-            tag_names: getComponentTagNames(component),
-            limit: 8,
-        }),
-    });
+    startLongRunningAiRequest();
+    let result;
+    try {
+        result = await apiRequest("/search/recommend_locations", {
+            method: "POST",
+            body: JSON.stringify({
+                text: [component.name, component.description || ""].join(" ").trim(),
+                tag_names: getComponentTagNames(component),
+                limit: 8,
+            }),
+        });
+    } finally {
+        finishLongRunningAiRequest();
+    }
     const list = q("#placement-recommendations");
     list.innerHTML = "";
     if (!result.recommendations.length) {
@@ -4680,26 +5007,32 @@ async function aiFillCell() {
         throw new Error("请输入描述或名称");
     }
     showToast("正在联网搜索并填充信息...");
-    const response = await apiRequest("/ai/verify_components", {
-        method: "POST",
-        body: JSON.stringify({
-            items: [
-                {
-                    position_identifier: q("#cell-position").value,
-                    is_empty: false,
-                    name,
-                    tags: parseList(q("#cell-component-tags").value),
-                    attributes: collectAttributeRows(q("#cell-component-attribute-list")),
-                    notes: q("#cell-component-description").value.trim() || prompt,
-                    stock_mode: "fuzzy",
-                    quantity_fuzzy: "未知",
-                },
-            ],
-            use_web: true,
-            search_provider_config_id: getSelectedSearchProviderConfigId(),
-            additional_prompt: prompt,
-        }),
-    });
+    startLongRunningAiRequest();
+    let response;
+    try {
+        response = await apiRequest("/ai/verify_components", {
+            method: "POST",
+            body: JSON.stringify({
+                items: [
+                    {
+                        position_identifier: q("#cell-position").value,
+                        is_empty: false,
+                        name,
+                        tags: parseList(q("#cell-component-tags").value),
+                        attributes: collectAttributeRows(q("#cell-component-attribute-list")),
+                        notes: q("#cell-component-description").value.trim() || prompt,
+                        stock_mode: "fuzzy",
+                        quantity_fuzzy: "未知",
+                    },
+                ],
+                use_web: true,
+                search_provider_config_id: getSelectedSearchProviderConfigId(),
+                additional_prompt: prompt,
+            }),
+        });
+    } finally {
+        finishLongRunningAiRequest();
+    }
     const item = response.verified_items[0];
     if (!item) {
         throw new Error("AI 没有返回可填充信息");
@@ -4843,10 +5176,16 @@ async function runAiSearchQuery(query) {
     if (!query) {
         throw new Error("请输入自然语言需求");
     }
-    const response = await apiRequest("/search/semantic", {
-        method: "POST",
-        body: JSON.stringify({query, use_llm: true, limit: 20}),
-    });
+    startLongRunningAiRequest();
+    let response;
+    try {
+        response = await apiRequest("/search/semantic", {
+            method: "POST",
+            body: JSON.stringify({query, use_llm: true, limit: 20}),
+        });
+    } finally {
+        finishLongRunningAiRequest();
+    }
     renderAiSearchSummary(response);
     renderSearchResults(response.results, "AI 没有在已有库存中找到合适器件。");
     showToast(response.parsed_query.llm_used ? "AI 搜索完成" : "已使用关键字兜底搜索");
@@ -4884,14 +5223,20 @@ function renderAiSearchSummary(response) {
 
 async function runRecommendation(event) {
     event.preventDefault();
-    const result = await apiRequest("/search/recommend_locations", {
-        method: "POST",
-        body: JSON.stringify({
-            text: q("#recommendation-text").value.trim() || null,
-            tag_names: parseList(q("#recommendation-tags").value),
-            preferred_box_id: q("#recommendation-box-id").value ? Number(q("#recommendation-box-id").value) : null,
-        }),
-    });
+    startLongRunningAiRequest();
+    let result;
+    try {
+        result = await apiRequest("/search/recommend_locations", {
+            method: "POST",
+            body: JSON.stringify({
+                text: q("#recommendation-text").value.trim() || null,
+                tag_names: parseList(q("#recommendation-tags").value),
+                preferred_box_id: q("#recommendation-box-id").value ? Number(q("#recommendation-box-id").value) : null,
+            }),
+        });
+    } finally {
+        finishLongRunningAiRequest();
+    }
     const list = q("#recommendation-list");
     list.innerHTML = "";
     if (!result.recommendations.length) {
@@ -5260,6 +5605,7 @@ async function boot() {
     try {
         await refreshCurrentUser();
         await refreshAll();
+        restoreRecognitionDraft();
         hideLoginModal();
     } catch (error) {
         clearAuthToken();

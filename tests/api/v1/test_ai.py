@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app import schemas
 from app.api.v1.endpoints import ai as ai_endpoint
 from app.core.config import settings
-from app.services import vlm_client, web_search
+from app.services import recognition_prompt, vlm_client, web_search
 
 
 def test_upsert_default_vlm_config_hides_api_key(client: TestClient) -> None:
@@ -52,6 +52,31 @@ def test_read_default_vlm_config(client: TestClient) -> None:
     assert content["name"] == data["name"]
     assert content["has_api_key"] is True
     assert "api_key" not in content
+
+
+def test_recognition_and_verification_prompts_include_name_rules(
+    client: TestClient,
+) -> None:
+    response = client.get(f"{settings.API_V1_STR}/ai/recognition_prompt")
+    assert response.status_code == 200
+    prompt = response.json()["prompt"]
+
+    assert recognition_prompt.COMPONENT_NAME_RULE_TEXT in prompt
+    assert "12V 离心风扇" in prompt
+    assert "薄膜压力传感器" in prompt
+    assert "触摸开关模块" in prompt
+
+    verification_prompt = ai_endpoint._build_verification_prompt(
+        items=[
+            schemas.RecognizedCell(
+                position_identifier="R1C1",
+                name="12V 5015",
+                tags=["风扇"],
+            )
+        ],
+        web_contexts=[],
+    )
+    assert recognition_prompt.COMPONENT_NAME_RULE_TEXT in verification_prompt
 
 
 def test_upsert_default_vlm_config_preserves_existing_api_key(

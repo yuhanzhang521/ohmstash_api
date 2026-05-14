@@ -67,8 +67,23 @@ def run_app_js_expression(expression: str) -> Any:
         }}
 
         const code = fs.readFileSync("app/static/app.js", "utf8").replace(/\\nboot\\(\\);\\s*$/, "\\n");
+        const storage = new Map();
+        const localStorage = {{
+            getItem: (key) => storage.has(key) ? storage.get(key) : "",
+            setItem: (key, value) => storage.set(key, String(value)),
+            removeItem: (key) => storage.delete(key),
+        }};
         const context = {{
-            window: {{localStorage: {{getItem: () => ""}}}},
+            window: {{
+                __storage: storage,
+                localStorage,
+                addEventListener: () => {{}},
+                clearTimeout: () => {{}},
+                setTimeout: (callback) => {{
+                    callback();
+                    return 0;
+                }},
+            }},
             document: {{
                 createElement: createTestElement,
                 querySelector: () => null,
@@ -424,6 +439,149 @@ def test_recognition_upload_requests_retry_transient_network_errors() -> None:
     assert len(result["statuses"]) == 2
     assert "自动重试 (2/3)" in result["statuses"][0]
     assert result["response"]["ok"] is True
+
+
+def test_recognition_draft_restores_until_explicitly_cleared() -> None:
+    result = run_app_js_expression(
+        """
+        (() => {
+            const elements = {};
+            function addElement(selector, value = "") {
+                const element = document.createElement("div");
+                element.value = value;
+                element.checked = false;
+                elements[selector] = element;
+                return element;
+            }
+
+            [
+                "#recognition-mode",
+                "#recognition-box-id",
+                "#recognition-template-id",
+                "#recognition-layout-type",
+                "#recognition-prompt",
+                "#verification-search-provider-id",
+                "#recognized-box-name",
+                "#recognized-box-readable-id",
+                "#recognized-template-name",
+                "#recognized-template-rows",
+                "#recognized-template-cols",
+                "#recognized-template-layout-json",
+                "#recognition-summary",
+                "#recognition-box-line",
+                "#recognition-template-line",
+                "#recognition-layout-line",
+                "#recognition-overwrite-line",
+                "#recognized-info-panel",
+                "#recognized-box-fields",
+                "#recognized-template-fields",
+                "#recognition-edit-toggle",
+                "#ai-result-viewer",
+            ].forEach((selector) => addElement(selector));
+            addElement("#recognition-overwrite-existing").checked = true;
+
+            document.querySelector = (selector) => elements[selector] || null;
+            document.querySelectorAll = () => [];
+
+            state.currentUser = {username: "admin"};
+            state.boxes = [{id: 7, template_id: 3, readable_id: "BOX-7", name: "Fan"}];
+            state.templates = [{id: 3, layout_type: "grid", layout_definition: {rows: 1, cols: 2}}];
+            elements["#recognition-mode"].value = "existing_box";
+            elements["#recognition-box-id"].value = "7";
+            elements["#recognition-template-id"].value = "3";
+            elements["#recognition-layout-type"].value = "grid";
+            elements["#recognition-prompt"].value = "优先使用功能名词";
+            elements["#verification-search-provider-id"].value = "5";
+            state.recognitionMode = "existing_box";
+            state.lastRecognition = {
+                filename: "phone.jpg",
+                latency_ms: 61000,
+                config_id: 1,
+                content_type: "image/jpeg",
+            };
+            state.recognitionCells = [
+                {
+                    position_identifier: "R1C1",
+                    is_empty: false,
+                    name: "12V 离心风扇",
+                    tags: ["风扇"],
+                    attributes: {"供电电压": "12V"},
+                    display_attribute: "供电电压",
+                    verify_selected: true,
+                },
+                {
+                    position_identifier: "R1C2",
+                    is_empty: true,
+                    name: "",
+                    tags: [],
+                    attributes: {},
+                },
+            ];
+
+            const saved = saveRecognitionDraftFromCurrentState();
+            const stored = JSON.parse(window.__storage.get(RECOGNITION_DRAFT_STORAGE_KEY));
+            state.recognitionCells = [];
+            elements["#recognition-summary"].textContent = "";
+            const restored = restoreRecognitionDraft();
+            const restoredName = state.recognitionCells[0].name;
+            const restoredPrompt = elements["#recognition-prompt"].value;
+            const restoredSummary = elements["#recognition-summary"].textContent;
+            clearRecognitionDraft();
+            return {
+                saved,
+                storedName: stored.cells[0].name,
+                restored,
+                restoredName,
+                restoredPrompt,
+                restoredSummary,
+                draftExistsAfterClear: window.__storage.has(RECOGNITION_DRAFT_STORAGE_KEY),
+            };
+        })()
+        """
+    )
+
+    assert result["saved"] is True
+    assert result["storedName"] == "12V 离心风扇"
+    assert result["restored"] is True
+    assert result["restoredName"] == "12V 离心风扇"
+    assert result["restoredPrompt"] == "优先使用功能名词"
+    assert "已恢复未入库结果" in result["restoredSummary"]
+    assert result["draftExistsAfterClear"] is False
+
+
+def test_pending_ai_requests_warn_before_page_unload() -> None:
+    result = run_app_js_expression(
+        """
+        (() => {
+            const event = {
+                prevented: false,
+                returnValue: "",
+                preventDefault() {
+                    this.prevented = true;
+                },
+            };
+            startLongRunningAiRequest();
+            const warning = warnBeforeUnloadDuringAi(event);
+            finishLongRunningAiRequest();
+            const idleWarning = warnBeforeUnloadDuringAi({
+                preventDefault() {
+                    throw new Error("should not warn when idle");
+                },
+            });
+            return {
+                prevented: event.prevented,
+                returnValue: event.returnValue,
+                warning,
+                idleWarning: idleWarning ?? null,
+            };
+        })()
+        """
+    )
+
+    assert result["prevented"] is True
+    assert "AI 正在处理" in result["returnValue"]
+    assert result["warning"] == result["returnValue"]
+    assert result["idleWarning"] is None
 
 
 def test_login_asset_is_served() -> None:
