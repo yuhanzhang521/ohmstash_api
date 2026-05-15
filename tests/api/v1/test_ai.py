@@ -115,13 +115,34 @@ def test_component_name_normalization_prefers_function_nouns() -> None:
                     "tags": ["舵机"],
                     "attributes": {},
                 },
+                {
+                    "position_identifier": "R1C5",
+                    "is_empty": False,
+                    "name": "0.5-3",
+                    "tags": ["端子"],
+                    "attributes": {"规格": "0.5-3", "类型": "线鼻子"},
+                },
+                {
+                    "position_identifier": "R1C6",
+                    "is_empty": False,
+                    "name": "5欧姆",
+                    "tags": ["电阻"],
+                    "attributes": {"功率": "10W", "阻值": "5欧姆", "类型": "水泥电阻"},
+                },
             ]
         }
     )
 
     assert normalized
     names = [cell["name"] for cell in normalized["cells"]]
-    assert names == ["12V离心风扇", "薄膜压力传感器", "触摸开关模块", "SG90舵机"]
+    assert names == [
+        "12V离心风扇",
+        "薄膜压力传感器",
+        "触摸开关模块",
+        "SG90舵机",
+        "0.5-3线鼻子",
+        "10W 5欧姆水泥电阻",
+    ]
     assert normalized["cells"][0]["attributes"]["供电电压"] == "12V"
     assert normalized["cells"][0]["attributes"]["类型"] == "离心风扇"
     assert normalized["cells"][3]["attributes"]["型号"] == "SG90"

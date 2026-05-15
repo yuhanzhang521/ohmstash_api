@@ -16,6 +16,8 @@ MODEL_ATTRIBUTE_KEYS = (
     "Manufacturer Part Number",
 )
 PACKAGE_ATTRIBUTE_KEYS = ("封装", "Package", "封装规格")
+POWER_ATTRIBUTE_KEYS = ("功率", "额定功率", "Power")
+SPEC_ATTRIBUTE_KEYS = ("规格", "尺寸", "规格型号", "线径")
 THROUGH_HOLE_TERMS = ("插件", "直插", "through hole", "tht", "dip", "轴向")
 SMD_PACKAGE_PATTERN = re.compile(
     r"^(?:0[2468]02|0201|0402|0603|0805|1206|1210|1812|2010|2512|"
@@ -60,11 +62,15 @@ FUNCTION_PHRASES = (
     "离心风扇",
     "轴流风扇",
     "散热风扇",
+    "水泥电阻",
+    "线鼻子",
+    "冷压端子",
+    "压线端子",
+    "接线端子",
     "风扇",
     "传感器",
     "开关",
     "连接器",
-    "接线端子",
     "端子",
     "蜂鸣器",
     "步进电机",
@@ -120,24 +126,6 @@ def normalize_recognized_cell_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         normalized.get("notes"),
     )
 
-    passive_name = _build_passive_name(name, source_text, attribute_map)
-    if passive_name:
-        normalized["name"] = passive_name
-        _ensure_passive_attributes(attribute_map, passive_name, source_text)
-        return normalized
-
-    if _is_integrated_circuit(source_text) and not _is_functional_component(source_text):
-        model_name = _extract_model_name(name, attribute_map)
-        if model_name:
-            normalized["name"] = model_name
-            _ensure_attribute_value(
-                attribute_map,
-                MODEL_ATTRIBUTE_KEYS,
-                "型号",
-                model_name,
-            )
-            return normalized
-
     phrase = _extract_function_phrase(source_text)
     functional_name = _build_functional_name(
         name,
@@ -152,6 +140,25 @@ def normalize_recognized_cell_payload(payload: Dict[str, Any]) -> Dict[str, Any]
             phrase=phrase or _extract_function_phrase(functional_name),
             source_name=name,
         )
+        return normalized
+
+    passive_name = _build_passive_name(name, source_text, attribute_map)
+    if passive_name:
+        normalized["name"] = passive_name
+        _ensure_passive_attributes(attribute_map, passive_name, source_text)
+        return normalized
+
+    if _is_integrated_circuit(source_text):
+        model_name = _extract_model_name(name, attribute_map)
+        if model_name:
+            normalized["name"] = model_name
+            _ensure_attribute_value(
+                attribute_map,
+                MODEL_ATTRIBUTE_KEYS,
+                "型号",
+                model_name,
+            )
+            return normalized
 
     return normalized
 
@@ -250,10 +257,49 @@ def _build_functional_name(
     if "风扇" in phrase and voltage:
         return f"{voltage}{phrase}"
 
+    if phrase == "水泥电阻":
+        return _build_cement_resistor_name(phrase, name, attributes)
+
+    if phrase == "线鼻子":
+        return _build_spec_prefixed_name(phrase, name, attributes)
+
     if phrase in name:
         return _strip_nonessential_prefix(name, phrase)
 
     return phrase
+
+
+def _build_cement_resistor_name(
+    phrase: str,
+    name: str,
+    attributes: Dict[str, Any],
+) -> str:
+    power = _first_attribute_value(attributes, POWER_ATTRIBUTE_KEYS)
+    resistance = _first_attribute_value(attributes, PASSIVE_RULES[0][1])
+    if not resistance:
+        resistance = _extract_passive_value_from_name(name)
+    leading_text = " ".join(part for part in [power, resistance] if part)
+    return f"{leading_text}{phrase}" if leading_text else phrase
+
+
+def _build_spec_prefixed_name(
+    phrase: str,
+    name: str,
+    attributes: Dict[str, Any],
+) -> str:
+    spec = _first_attribute_value(attributes, SPEC_ATTRIBUTE_KEYS)
+    if not spec:
+        spec = _extract_leading_spec(name, phrase)
+    return f"{spec}{phrase}" if spec else phrase
+
+
+def _extract_leading_spec(name: str, phrase: str) -> str:
+    phrase_index = name.find(phrase)
+    if phrase_index <= 0:
+        return ""
+    prefix = name[:phrase_index].strip(" -_/，,")
+    tokens = [token for token in re.split(r"\s+", prefix) if token]
+    return tokens[-1] if tokens else ""
 
 
 def _ensure_passive_attributes(

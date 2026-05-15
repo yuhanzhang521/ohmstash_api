@@ -300,10 +300,23 @@ def test_manage_grid_uses_scrollable_equal_width_columns() -> None:
                     display_attribute: "容值",
                     attributes: {"封装": "0603", "容值": "75pF", "耐压": "50V"},
                 }),
-                longModelTitle: getInventoryDisplayTitle({
-                    component_name: "MSM261S4030H0R",
-                    display_attribute: "型号",
-                    attributes: {"型号": "MSM261S4030H0R"},
+                pressureSensorTitle: getInventoryDisplayTitle({
+                    component_name: "薄膜压力传感器",
+                    display_name: "5g-1kg",
+                    display_attribute: "量程",
+                    attributes: {"量程": "5g-1kg", "类型": "薄膜压力传感器"},
+                }),
+                fanTitle: getInventoryDisplayTitle({
+                    component_name: "12V离心风扇",
+                    display_name: "12V",
+                    display_attribute: "供电电压",
+                    attributes: {"供电电压": "12V", "类型": "离心风扇", "规格": "5015"},
+                }),
+                cementResistorTitle: getInventoryDisplayTitle({
+                    component_name: "10W 5欧姆水泥电阻",
+                    display_name: "5欧姆",
+                    display_attribute: "阻值",
+                    attributes: {"功率": "10W", "阻值": "5欧姆", "类型": "水泥电阻"},
                 }),
             };
         })()
@@ -313,7 +326,9 @@ def test_manage_grid_uses_scrollable_equal_width_columns() -> None:
     assert result["columns"] == "repeat(8, minmax(88px, 1fr))"
     assert result["minWidth"] == "max(100%, 746px)"
     assert result["title"] == "75pF"
-    assert result["longModelTitle"] == "MSM261S4030H0R"
+    assert result["pressureSensorTitle"] == "薄膜压力传感器"
+    assert result["fanTitle"] == "12V离心风扇"
+    assert result["cementResistorTitle"] == "10W 5欧姆水泥电阻"
 
 
 def test_manage_select_all_ignores_empty_cells() -> None:

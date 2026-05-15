@@ -1822,10 +1822,20 @@ function getManageGridMinWidth(cols) {
 
 function getInventoryDisplayTitle(item) {
     const attributes = item.attributes || {};
+    const componentName = item.component_name || "";
+    const attributeTitle = getAttributeDisplayText(attributes, item.display_attribute || "");
+    if (shouldPreferComponentNameTitle(componentName)) {
+        return componentName || item.display_name || attributeTitle || "";
+    }
     return item.display_name
-        || getAttributeDisplayText(attributes, item.display_attribute || "")
-        || item.component_name
+        || attributeTitle
+        || componentName
         || "";
+}
+
+function shouldPreferComponentNameTitle(componentName) {
+    const name = String(componentName || "");
+    return /传感器|风扇|舵机|电机|模块|开关|端子|线鼻子|连接器|蜂鸣器|摄像头|显示屏|屏幕|电池座|保险丝|继电器|水泥电阻/.test(name);
 }
 
 function getSelectableManageSubBoxIds() {
