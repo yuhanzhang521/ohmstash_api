@@ -1,9 +1,12 @@
 import base64
+import ipaddress
 import json
 import logging
 import re
+import socket
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 
@@ -29,9 +32,34 @@ class VlmClientError(Exception):
         self.response_body = response_body
 
 
+def validate_base_url(base_url: str) -> None:
+    parsed_url = urlparse(base_url)
+    if parsed_url.scheme != "https":
+        raise VlmClientError("VLM base_url must use https")
+    if not parsed_url.hostname:
+        raise VlmClientError("VLM base_url must include a hostname")
+    if _is_private_hostname(parsed_url.hostname):
+        raise VlmClientError("VLM base_url cannot target private network hosts")
+
+
+def _is_private_hostname(hostname: str) -> bool:
+    try:
+        addresses = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise VlmClientError("VLM base_url hostname cannot be resolved") from exc
+
+    for address in addresses:
+        ip_address = ipaddress.ip_address(address[4][0])
+        if not ip_address.is_global:
+            return True
+    return False
+
+
 def get_base_url(config: VlmProviderConfig) -> str:
     if config.base_url:
-        return config.base_url.rstrip("/")
+        base_url = config.base_url.rstrip("/")
+        validate_base_url(base_url)
+        return base_url
 
     if config.provider == "openai":
         return DEFAULT_OPENAI_BASE_URL

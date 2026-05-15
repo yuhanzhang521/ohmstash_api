@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -15,7 +15,8 @@ PASSWORD_ITERATIONS = 260_000
 SESSION_TOKEN_BYTES = 32
 API_KEY_BYTES = 32
 API_KEY_PREFIX = "ohm"
-session_tokens: dict[str, int] = {}
+SESSION_TOKEN_TTL_HOURS = 12
+session_tokens: dict[str, tuple[int, datetime]] = {}
 
 
 @dataclass
@@ -91,13 +92,18 @@ def authenticate_user(
 
 def create_session_token(user: AuthUser) -> str:
     token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
-    session_tokens[token] = int(user.id)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TOKEN_TTL_HOURS)
+    session_tokens[token] = (int(user.id), expires_at)
     return token
 
 
 def get_session_principal(db: Session, token: str) -> Optional[AuthPrincipal]:
-    user_id = session_tokens.get(token)
-    if not user_id:
+    session = session_tokens.get(token)
+    if not session:
+        return None
+    user_id, expires_at = session
+    if expires_at <= datetime.now(timezone.utc):
+        session_tokens.pop(token, None)
         return None
     user = db.query(AuthUser).filter(AuthUser.id == user_id).first()
     if not user or not user.is_active:

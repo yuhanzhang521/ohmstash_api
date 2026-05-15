@@ -4,14 +4,6 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>OhmStash</title>
-    <script>
-        (() => {
-            const theme = window.localStorage.getItem("ohmstash_theme");
-            if (theme === "dark" || theme === "light") {
-                document.documentElement.dataset.theme = theme;
-            }
-        })();
-    </script>
     <link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
@@ -370,7 +362,7 @@
                 <section class="panel">
                     <div class="panel-heading">
                         <h3>盒子标签</h3>
-                        <a class="secondary-button disabled-link" id="label-download-link" href="#" download>下载 WDFX</a>
+                        <a class="secondary-button disabled-link" id="label-download-link" download aria-disabled="true" tabindex="-1">下载 WDFX</a>
                     </div>
                     <div class="label-preview" id="label-preview">创建或选择盒子后显示 30x15mm 标签和 WDFX 下载。</div>
                 </section>
@@ -893,6 +885,7 @@
                         <option value="充足">充足</option>
                         <option value="少量">少量</option>
                         <option value="紧张">紧张</option>
+                        <option value="未知">未知</option>
                         <option value="用尽">用尽</option>
                         <option value="custom">自定义数量</option>
                     </select>
@@ -931,6 +924,7 @@
                         <option value="充足">充足</option>
                         <option value="少量">少量</option>
                         <option value="紧张">紧张</option>
+                        <option value="未知">未知</option>
                         <option value="用尽">用尽</option>
                         <option value="custom">自定义数量</option>
                     </select>

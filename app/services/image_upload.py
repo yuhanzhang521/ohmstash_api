@@ -7,6 +7,7 @@ from fastapi import UploadFile
 IMAGE_OPTIMIZE_THRESHOLD_BYTES = 3 * 1024 * 1024
 IMAGE_TARGET_MAX_BYTES = 3 * 1024 * 1024
 IMAGE_MAX_SIDE = 2400
+IMAGE_UPLOAD_MAX_BYTES = 12 * 1024 * 1024
 JPEG_QUALITY_STEPS = (88, 82, 76, 70)
 
 ALLOWED_IMAGE_EXTENSIONS = {
@@ -18,6 +19,13 @@ ALLOWED_IMAGE_EXTENSIONS = {
     ".png",
     ".webp",
 }
+
+
+def read_limited_upload(file: UploadFile, *, max_bytes: int = IMAGE_UPLOAD_MAX_BYTES) -> bytes:
+    content = file.file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise ValueError("Uploaded image is too large")
+    return content
 
 
 def normalize_upload_image(file: UploadFile, content: bytes) -> Tuple[bytes, str]:

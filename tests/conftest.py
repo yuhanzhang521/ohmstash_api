@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from typing import Generator
@@ -5,21 +6,37 @@ from typing import Generator
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.api import deps
 from app.core.config import settings
+
+TEST_DATABASE_NAME_SUFFIX = "_test"
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or settings.DATABASE_URL
+
+
+def _ensure_safe_test_database(database_url: str) -> None:
+    database_name = make_url(database_url).database or ""
+    if not database_name.endswith(TEST_DATABASE_NAME_SUFFIX):
+        raise RuntimeError("Test database name must end with '_test'")
+
+
+_ensure_safe_test_database(TEST_DATABASE_URL)
+settings.DATABASE_URL = TEST_DATABASE_URL
+
 from app.database import Base, ensure_schema_compatibility
 from app.main import app
 
-engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def db_lifecycle() -> Generator[None, None, None]:
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     ensure_schema_compatibility()
     yield

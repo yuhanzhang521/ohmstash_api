@@ -44,10 +44,6 @@ class Settings(BaseSettings):
         return (self.DEPLOYMENT_MODE or "").strip().lower() == "reverse_proxy"
 
     @property
-    def behind_reverse_proxy(self) -> bool:
-        return (self.DEPLOYMENT_MODE or "").strip().lower() == "reverse_proxy"
-
-    @property
     def service_scheme(self) -> str:
         if self.behind_reverse_proxy:
             return "http"
@@ -80,6 +76,16 @@ class Settings(BaseSettings):
     @property
     def backend_port(self) -> int:
         return self.HTTP_PORT if self.uses_caddy_acme else self.service_port
+
+    @property
+    def is_production_mode(self) -> bool:
+        return self.behind_reverse_proxy or bool(self.PUBLIC_BASE_URL or self.ACME_DOMAIN)
+
+    def validate_runtime_security(self) -> None:
+        if not self.is_production_mode:
+            return
+        if self.DEFAULT_ADMIN_USERNAME == "admin" and self.DEFAULT_ADMIN_PASSWORD == "password":
+            raise ValueError("Default admin credentials cannot be used in production mode")
 
     @model_validator(mode="after")
     def assemble_database_url(self) -> "Settings":
@@ -114,3 +120,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+settings.validate_runtime_security()

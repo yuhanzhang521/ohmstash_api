@@ -63,6 +63,10 @@ class LogLinesResponse(BaseModel):
     lines: List[str]
 
 
+class DatabaseClearRequest(BaseModel):
+    confirmation: str = Field(pattern="^CLEAR DATABASE$")
+
+
 class DatabaseClearResponse(BaseModel):
     deleted_boxes: int
     deleted_components: int

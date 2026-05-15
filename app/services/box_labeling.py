@@ -1,6 +1,7 @@
 from collections import Counter
 from typing import Any, List
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app import models
@@ -27,18 +28,15 @@ __all__ = [
 
 
 def generate_next_box_readable_id(db: Session) -> str:
-    latest_box = db.query(models.Box).order_by(models.Box.id.desc()).first()
-    next_number = (latest_box.id + 1) if latest_box else 1
-    while True:
-        readable_id = f"BOX-{next_number:04d}"
-        exists = (
-            db.query(models.Box)
-            .filter(models.Box.readable_id == readable_id)
-            .first()
+    db.execute(text("SELECT pg_advisory_xact_lock(624858731)"))
+    last_number = db.execute(
+        text(
+            "SELECT COALESCE(MAX((substring(readable_id from 5))::integer), 0) "
+            "FROM boxes "
+            "WHERE readable_id ~ '^BOX-[0-9]{4,}$'"
         )
-        if not exists:
-            return readable_id
-        next_number += 1
+    ).scalar_one()
+    return f"BOX-{last_number + 1:04d}"
 
 
 def format_template_label(

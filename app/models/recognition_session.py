@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Boolean, Column, DateTime, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func
 
 from app.database import Base
 
@@ -15,10 +15,13 @@ class RecognitionSession(Base):
     verification_status = Column(String(32), nullable=False, default="idle")
     filename = Column(String(255), nullable=False)
     content_type = Column(String(100), nullable=False)
-    config_id = Column(Integer)
-    search_provider_config_id = Column(Integer)
-    box_id = Column(Integer)
-    template_id = Column(Integer)
+    config_id = Column(Integer, ForeignKey("vlm_provider_configs.id", ondelete="SET NULL"))
+    search_provider_config_id = Column(
+        Integer,
+        ForeignKey("search_provider_configs.id", ondelete="SET NULL"),
+    )
+    box_id = Column(Integer, ForeignKey("boxes.id", ondelete="SET NULL"))
+    template_id = Column(Integer, ForeignKey("box_templates.id", ondelete="SET NULL"))
     layout_type = Column(String(32))
     additional_prompt = Column(Text, nullable=False, default="")
     overwrite_existing = Column(Boolean, nullable=False, default=False)

@@ -1,4 +1,15 @@
 const API_BASE = "/api/v1";
+const AUTH_TOKEN_STORAGE_KEY = "ohmstash_token";
+const THEME_STORAGE_KEY = "ohmstash_theme";
+
+applyInitialThemeMode();
+
+function applyInitialThemeMode() {
+    const theme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (theme === "dark" || theme === "light") {
+        document.documentElement.dataset.theme = theme;
+    }
+}
 
 function q(selector) {
     return document.querySelector(selector);
@@ -60,7 +71,8 @@ async function login(event) {
         if (!response.ok) {
             throw new Error(extractErrorMessage(data, "登录失败"));
         }
-        window.localStorage.setItem("ohmstash_token", data.token);
+        window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
+        window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
         window.location.href = getNextUrl();
     } catch (error) {
         showLoginError(error.message);

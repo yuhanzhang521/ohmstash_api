@@ -110,7 +110,11 @@ def test_clear_database_preserves_provider_and_account_config(
     )
     assert component_response.status_code == 200
 
-    clear_response = client.delete(f"{settings.API_V1_STR}/system/database")
+    clear_response = client.request(
+        "DELETE",
+        f"{settings.API_V1_STR}/system/database",
+        json={"confirmation": "CLEAR DATABASE"},
+    )
     assert clear_response.status_code == 200
     assert clear_response.json()["deleted_boxes"] >= 1
     assert clear_response.json()["deleted_components"] >= 1

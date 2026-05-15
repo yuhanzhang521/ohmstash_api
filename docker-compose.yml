@@ -14,7 +14,7 @@ services:
     restart: unless-stopped
 
   api:
-    image: ghcr.io/yuhanzhang521/ohmstash-api:latest
+    image: ghcr.io/yuhanzhang521/ohmstash-api:${OHMSTASH_API_IMAGE_TAG:?Set OHMSTASH_API_IMAGE_TAG in .env.docker}
     container_name: ohmstash-api
     env_file:
       - .env.docker
@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: ghcr.io/yuhanzhang521/ohmstash-caddy:latest
+    image: ghcr.io/yuhanzhang521/ohmstash-caddy:${OHMSTASH_CADDY_IMAGE_TAG:?Set OHMSTASH_CADDY_IMAGE_TAG in .env.docker}
     container_name: ohmstash-caddy
     env_file:
       - .env.docker
@@ -42,7 +42,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "443:443/tcp"
+      - "443:443/udp"
     volumes:
       - ./caddy:/etc/caddy
       - ohmstash-caddy-data:/data

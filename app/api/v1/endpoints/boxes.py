@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
@@ -15,7 +16,44 @@ from app.services.component_display import build_component_display_name
 from app.services.label_generator import generate_box_label_svg
 from app.services.wdfx_label import generate_box_label_wdfx
 
+BOX_READABLE_ID_RETRY_COUNT = 3
+
 router = APIRouter()
+
+
+def create_box_with_retry(db: Session, box_in: schemas.BoxCreate) -> models.Box:
+    auto_generate_readable_id = not box_in.readable_id
+    for _attempt in range(BOX_READABLE_ID_RETRY_COUNT):
+        create_data = box_in
+        if auto_generate_readable_id:
+            create_data = schemas.BoxCreate(
+                readable_id=generate_next_box_readable_id(db),
+                name=box_in.name,
+                template_id=box_in.template_id,
+            )
+        elif _box_readable_id_exists(db, box_in.readable_id):
+            raise HTTPException(status_code=400, detail="Box readable_id already exists")
+        try:
+            return crud.box.create(db=db, obj_in=create_data)
+        except IntegrityError as exc:
+            db.rollback()
+            if not auto_generate_readable_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Box readable_id already exists",
+                ) from exc
+    raise HTTPException(status_code=409, detail="Box readable_id generation conflict")
+
+
+def _box_readable_id_exists(db: Session, readable_id: str | None) -> bool:
+    if not readable_id:
+        return False
+    return (
+        db.query(models.Box)
+        .filter(models.Box.readable_id == readable_id)
+        .first()
+        is not None
+    )
 
 
 def _get_component_display_name(
@@ -39,30 +77,15 @@ def create_box(
     if not template:
         raise HTTPException(status_code=404, detail="Box template not found")
 
-    if not box_in.readable_id:
-        box_in = schemas.BoxCreate(
-            readable_id=generate_next_box_readable_id(db),
-            name=box_in.name,
-            template_id=box_in.template_id,
-        )
-
-    existing_box = (
-        db.query(models.Box)
-        .filter(models.Box.readable_id == box_in.readable_id)
-        .first()
-    )
-    if existing_box:
-        raise HTTPException(status_code=400, detail="Box readable_id already exists")
-
-    box = crud.box.create(db=db, obj_in=box_in)
+    box = create_box_with_retry(db=db, box_in=box_in)
     return box
 
 
 @router.get("/", response_model=List[schemas.Box])
 def read_boxes(
     db: Session = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
 ) -> Any:
     boxes = crud.box.get_multi(db, skip=skip, limit=limit)
     return boxes

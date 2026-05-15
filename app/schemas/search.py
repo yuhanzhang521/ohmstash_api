@@ -28,7 +28,7 @@ class ComponentSearchResult(BaseModel):
 class SemanticSearchRequest(BaseModel):
     query: str
     use_llm: bool = False
-    limit: int = 50
+    limit: int = Field(default=50, ge=1, le=100)
 
 
 class SemanticSearchResponse(BaseModel):

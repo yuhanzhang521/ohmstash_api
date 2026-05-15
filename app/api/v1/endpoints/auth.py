@@ -42,14 +42,9 @@ def read_current_user(
 def change_password(
     *,
     db: Session = Depends(deps.get_db),
-    principal: auth_service.AuthPrincipal = Depends(deps.get_current_principal),
+    principal: auth_service.AuthPrincipal = Depends(deps.get_current_user_principal),
     password_in: schemas.PasswordChangeRequest,
 ) -> Any:
-    if principal.kind != "user":
-        raise HTTPException(
-            status_code=403,
-            detail="Password can only be changed by a user session",
-        )
     user = db.query(AuthUser).filter(AuthUser.id == principal.id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -67,7 +62,7 @@ def change_password(
 @router.get("/api_keys", response_model=List[schemas.ApiKeyResponse])
 def read_api_keys(
     db: Session = Depends(deps.get_db),
-    _principal: auth_service.AuthPrincipal = Depends(deps.get_current_principal),
+    _principal: auth_service.AuthPrincipal = Depends(deps.get_current_user_principal),
 ) -> Any:
     return db.query(ApiKey).order_by(ApiKey.created_at.desc(), ApiKey.id.desc()).all()
 
@@ -76,7 +71,7 @@ def read_api_keys(
 def create_api_key(
     *,
     db: Session = Depends(deps.get_db),
-    _principal: auth_service.AuthPrincipal = Depends(deps.get_current_principal),
+    _principal: auth_service.AuthPrincipal = Depends(deps.get_current_user_principal),
     api_key_in: schemas.ApiKeyCreateRequest,
 ) -> Any:
     api_key, raw_key = auth_service.create_api_key(db, name=api_key_in.name)
@@ -93,7 +88,7 @@ def create_api_key(
 def delete_api_key(
     *,
     db: Session = Depends(deps.get_db),
-    _principal: auth_service.AuthPrincipal = Depends(deps.get_current_principal),
+    _principal: auth_service.AuthPrincipal = Depends(deps.get_current_user_principal),
     api_key_id: int,
 ) -> Any:
     api_key = db.query(ApiKey).filter(ApiKey.id == api_key_id).first()

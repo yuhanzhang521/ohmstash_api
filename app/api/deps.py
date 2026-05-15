@@ -7,6 +7,9 @@ from app.database import SessionLocal
 from app.services import auth
 
 
+ADMIN_REQUIRED_DETAIL = "Administrator user session required"
+
+
 def get_db() -> Generator[Session, None, None]:
     try:
         db = SessionLocal()
@@ -40,3 +43,14 @@ def get_current_principal(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid authentication token",
     )
+
+
+def get_current_user_principal(
+    principal: auth.AuthPrincipal = Depends(get_current_principal),
+) -> auth.AuthPrincipal:
+    if principal.kind != "user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ADMIN_REQUIRED_DETAIL,
+        )
+    return principal

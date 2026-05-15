@@ -64,6 +64,7 @@ from .tag import (
 )
 from .system import (
     CodeDecodeResponse,
+    DatabaseClearRequest,
     DatabaseClearResponse,
     LogLinesResponse,
     LoggingConfig,

@@ -11,6 +11,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Response,
     UploadFile,
 )
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.api import deps
+from app.api.v1.endpoints.boxes import create_box_with_retry
 from app.database import SessionLocal
 from app.models.search_provider_config import (
     SearchProviderConfig as SearchProviderConfigModel,
@@ -25,13 +27,12 @@ from app.models.search_provider_config import (
 from app.models.vlm_provider_config import VlmProviderConfig as VlmProviderConfigModel
 from app.services import auth
 from app.services import recognition_prompt, vlm_client, web_search
-from app.services.box_labeling import generate_next_box_readable_id
 from app.services.component_naming import (
     normalize_component_names_in_parsed_result,
     normalize_recognized_cell_payload,
 )
 from app.services.component_display import choose_component_display_attribute
-from app.services.image_upload import normalize_upload_image
+from app.services.image_upload import normalize_upload_image, read_limited_upload
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1112,8 +1113,8 @@ def create_vlm_config(
 @router.get("/vlm_configs/", response_model=List[schemas.VlmProviderConfig])
 def read_vlm_configs(
     db: Session = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
 ) -> Any:
     return crud.vlm_provider_config.get_multi(db=db, skip=skip, limit=limit)
 
@@ -1523,7 +1524,7 @@ def create_recognition_session(
         template_id=template_id,
         layout_type=layout_type,
     )
-    content = file.file.read()
+    content = read_limited_upload(file)
     try:
         normalized_content, normalized_content_type = normalize_upload_image(
             file,
@@ -1573,8 +1574,8 @@ def read_recognition_sessions(
     *,
     db: Session = Depends(deps.get_db),
     principal: auth.AuthPrincipal = Depends(deps.get_current_principal),
-    skip: int = 0,
-    limit: int = RECOGNITION_SESSION_HISTORY_LIMIT,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(RECOGNITION_SESSION_HISTORY_LIMIT, ge=1, le=RECOGNITION_SESSION_HISTORY_LIMIT),
 ) -> Any:
     safe_limit = min(max(limit, 1), RECOGNITION_SESSION_HISTORY_LIMIT)
     safe_skip = max(skip, 0)
@@ -1651,7 +1652,7 @@ def recognize_image(
     config_id: Optional[int] = Form(None),
     additional_prompt: str = Form(""),
 ) -> Any:
-    content = file.file.read()
+    content = read_limited_upload(file)
     try:
         normalized_content, content_type = normalize_upload_image(file, content)
     except ValueError as exc:
@@ -1684,7 +1685,7 @@ def recognize_box_image(
     if not box:
         raise HTTPException(status_code=404, detail="Box not found")
 
-    content = file.file.read()
+    content = read_limited_upload(file)
     try:
         normalized_content, content_type = normalize_upload_image(file, content)
     except ValueError as exc:
@@ -1721,7 +1722,7 @@ def recognize_box_template_image(
     if not template:
         raise HTTPException(status_code=404, detail="Box template not found")
 
-    content = file.file.read()
+    content = read_limited_upload(file)
     try:
         normalized_content, content_type = normalize_upload_image(file, content)
     except ValueError as exc:
@@ -1759,7 +1760,7 @@ def recognize_box_layout_image(
     if layout_type not in {"grid", "irregular"}:
         raise HTTPException(status_code=400, detail="Unsupported layout type")
 
-    content = file.file.read()
+    content = read_limited_upload(file)
     try:
         normalized_content, content_type = normalize_upload_image(file, content)
     except ValueError as exc:
@@ -1812,15 +1813,6 @@ def confirm_auto_box_recognition(
     db: Session = Depends(deps.get_db),
     confirm_in: schemas.ConfirmAutoBoxRecognitionRequest,
 ) -> Any:
-    readable_id = confirm_in.readable_id or generate_next_box_readable_id(db)
-    existing_box = (
-        db.query(models.Box)
-        .filter(models.Box.readable_id == readable_id)
-        .first()
-    )
-    if existing_box:
-        raise HTTPException(status_code=400, detail="Box readable_id already exists")
-
     template = crud.box_template.create(
         db=db,
         obj_in=schemas.BoxTemplateCreate(
@@ -1830,10 +1822,10 @@ def confirm_auto_box_recognition(
             physical_dimensions=confirm_in.physical_dimensions or {},
         ),
     )
-    box = crud.box.create(
+    box = create_box_with_retry(
         db=db,
-        obj_in=schemas.BoxCreate(
-            readable_id=readable_id,
+        box_in=schemas.BoxCreate(
+            readable_id=confirm_in.readable_id,
             name=confirm_in.box_name,
             template_id=template.id,
         ),
@@ -1863,19 +1855,10 @@ def confirm_new_box_recognition(
     if not template:
         raise HTTPException(status_code=404, detail="Box template not found")
 
-    readable_id = confirm_in.readable_id or generate_next_box_readable_id(db)
-    existing_box = (
-        db.query(models.Box)
-        .filter(models.Box.readable_id == readable_id)
-        .first()
-    )
-    if existing_box:
-        raise HTTPException(status_code=400, detail="Box readable_id already exists")
-
-    box = crud.box.create(
+    box = create_box_with_retry(
         db=db,
-        obj_in=schemas.BoxCreate(
-            readable_id=readable_id,
+        box_in=schemas.BoxCreate(
+            readable_id=confirm_in.readable_id,
             name=confirm_in.box_name,
             template_id=confirm_in.template_id,
         ),

@@ -1,6 +1,7 @@
 from typing import Any, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app import crud, schemas
@@ -9,16 +10,49 @@ from app.api import deps
 router = APIRouter()
 
 
+def _validate_inventory_references(
+    db: Session,
+    *,
+    sub_box_id: int,
+    component_id: int,
+) -> None:
+    if not crud.sub_box.get(db=db, id=sub_box_id):
+        raise HTTPException(status_code=404, detail="Sub-box not found")
+    if not crud.component.get(db=db, id=component_id):
+        raise HTTPException(status_code=404, detail="Component not found")
+
+
+def _validate_inventory_state(
+    inventory_item: Any,
+    inventory_in: schemas.InventoryUpdate,
+) -> None:
+    update_data = inventory_in.model_dump(exclude_unset=True)
+    merged_data = {
+        "sub_box_id": inventory_item.sub_box_id,
+        "component_id": inventory_item.component_id,
+        "stock_mode": inventory_item.stock_mode,
+        "quantity_exact": inventory_item.quantity_exact,
+        "quantity_fuzzy": inventory_item.quantity_fuzzy,
+        "notes": inventory_item.notes,
+    }
+    merged_data.update(update_data)
+    try:
+        schemas.InventoryCreate(**merged_data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+
+
 @router.post("/", response_model=schemas.Inventory)
 def create_inventory_item(
     *,
     db: Session = Depends(deps.get_db),
     inventory_in: schemas.InventoryCreate,
 ) -> Any:
-    """
-    Create a new inventory item, linking a component to a sub-box.
-    A component can only exist once in a sub-box.
-    """
+    _validate_inventory_references(
+        db,
+        sub_box_id=inventory_in.sub_box_id,
+        component_id=inventory_in.component_id,
+    )
     existing_item = crud.inventory.get_by_sub_box_and_component(
         db,
         sub_box_id=inventory_in.sub_box_id,
@@ -42,9 +76,6 @@ def read_inventory_item(
     db: Session = Depends(deps.get_db),
     inventory_id: int,
 ) -> Any:
-    """
-    Get a specific inventory item by its ID.
-    """
     inventory_item = crud.inventory.get(db=db, id=inventory_id)
     if not inventory_item:
         raise HTTPException(status_code=404, detail="Inventory item not found")
@@ -54,12 +85,9 @@ def read_inventory_item(
 @router.get("/", response_model=List[schemas.Inventory])
 def read_inventory_items(
     db: Session = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
 ) -> Any:
-    """
-    Retrieve inventory items.
-    """
     inventory_items = crud.inventory.get_multi(db, skip=skip, limit=limit)
     return inventory_items
 
@@ -71,15 +99,18 @@ def update_inventory_item(
     inventory_id: int,
     inventory_in: schemas.InventoryUpdate,
 ) -> Any:
-    """
-    Update an inventory item.
-    """
     inventory_item = crud.inventory.get(db=db, id=inventory_id)
     if not inventory_item:
         raise HTTPException(status_code=404, detail="Inventory item not found")
 
     target_sub_box_id = inventory_in.sub_box_id or inventory_item.sub_box_id
     target_component_id = inventory_in.component_id or inventory_item.component_id
+    _validate_inventory_references(
+        db,
+        sub_box_id=target_sub_box_id,
+        component_id=target_component_id,
+    )
+    _validate_inventory_state(inventory_item, inventory_in)
     existing_item = crud.inventory.get_by_sub_box_and_component(
         db,
         sub_box_id=target_sub_box_id,
@@ -105,9 +136,6 @@ def delete_inventory_item(
     db: Session = Depends(deps.get_db),
     inventory_id: int,
 ) -> Any:
-    """
-    Delete an inventory item.
-    """
     inventory_item = crud.inventory.get(db=db, id=inventory_id)
     if not inventory_item:
         raise HTTPException(status_code=404, detail="Inventory item not found")

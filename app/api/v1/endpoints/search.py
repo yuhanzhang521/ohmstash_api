@@ -4,6 +4,7 @@ from time import perf_counter
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app import crud, models, schemas
@@ -114,14 +115,6 @@ def _component_haystack(component: models.Component) -> str:
         json.dumps(component.attributes or {}, ensure_ascii=False),
     ]
     parts.extend(tag.name for tag in component.tags)
-    for inventory_item in component.inventory:
-        parts.append(inventory_item.notes or "")
-        if inventory_item.sub_box:
-            parts.append(inventory_item.sub_box.readable_id)
-            parts.append(inventory_item.sub_box.position_identifier)
-            if inventory_item.sub_box.box:
-                parts.append(inventory_item.sub_box.box.readable_id)
-                parts.append(inventory_item.sub_box.box.name or "")
     return " ".join(parts).lower()
 
 
@@ -187,8 +180,8 @@ def create_search_provider_config(
 @router.get("/providers/", response_model=List[schemas.SearchProviderConfig])
 def read_search_provider_configs(
     db: Session = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
 ) -> Any:
     return crud.search_provider_config.get_multi(db=db, skip=skip, limit=limit)
 
@@ -294,33 +287,49 @@ def _search_components(
     query: str,
     limit: int,
 ) -> List[schemas.ComponentSearchResult]:
-    terms = [term.lower() for term in query.split() if term.strip()]
-    components = (
-        db.query(models.Component)
-        .options(
-            joinedload(models.Component.tags),
-            joinedload(models.Component.inventory)
-            .joinedload(models.Inventory.sub_box)
-            .joinedload(models.SubBox.box),
-        )
-        .all()
+    terms = [term for term in query.split() if term.strip()]
+    component_query = db.query(models.Component).options(
+        joinedload(models.Component.tags),
+        joinedload(models.Component.inventory)
+        .joinedload(models.Inventory.sub_box)
+        .joinedload(models.SubBox.box),
     )
-
-    results: List[schemas.ComponentSearchResult] = []
-    for component in components:
-        haystack = _component_haystack(component)
-        if all(term in haystack for term in terms):
-            results.append(_serialize_component_result(component))
-        if len(results) >= limit:
-            break
-    return results
+    for term in terms:
+        pattern = f"%{term}%"
+        component_query = component_query.filter(
+            or_(
+                models.Component.name.ilike(pattern),
+                models.Component.description.ilike(pattern),
+                cast(models.Component.attributes, String).ilike(pattern),
+                models.Component.tags.any(models.Tag.name.ilike(pattern)),
+                models.Component.inventory.any(
+                    models.Inventory.notes.ilike(pattern),
+                ),
+                models.Component.inventory.any(
+                    models.Inventory.sub_box.has(
+                        or_(
+                            models.SubBox.readable_id.ilike(pattern),
+                            models.SubBox.position_identifier.ilike(pattern),
+                            models.SubBox.box.has(
+                                or_(
+                                    models.Box.readable_id.ilike(pattern),
+                                    models.Box.name.ilike(pattern),
+                                )
+                            ),
+                        )
+                    )
+                ),
+            )
+        )
+    components = component_query.order_by(models.Component.id.desc()).limit(limit).all()
+    return [_serialize_component_result(component) for component in components]
 
 
 @router.get("/", response_model=List[schemas.ComponentSearchResult])
 def keyword_search(
     db: Session = Depends(deps.get_db),
-    q: str = Query("", min_length=0),
-    limit: int = 50,
+    q: str = Query("", min_length=0, max_length=200),
+    limit: int = Query(50, ge=1, le=100),
 ) -> Any:
     return _search_components(db=db, query=q, limit=limit)
 

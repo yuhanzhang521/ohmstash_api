@@ -1,4 +1,6 @@
 const API_BASE = "/api/v1";
+const AUTH_TOKEN_STORAGE_KEY = "ohmstash_token";
+const browserSessionStorage = window.sessionStorage || window.localStorage;
 const THEME_STORAGE_KEY = "ohmstash_theme";
 const RECOGNITION_DRAFT_STORAGE_KEY = "ohmstash_recognition_draft";
 const RECOGNITION_ACTIVE_SESSION_STORAGE_KEY = "ohmstash_active_recognition_session";
@@ -109,6 +111,16 @@ const SUBMIT_BUSY_TEXT = {
     "#cell-editor-form": "保存中...",
 };
 
+applyInitialThemeMode();
+
+function applyInitialThemeMode() {
+    const theme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (theme === "dark" || theme === "light") {
+        document.documentElement.dataset.theme = theme;
+    }
+}
+
+
 const VERIFICATION_WARNING_PATTERNS = [
     /未检索到[^。；;，,\n]*(?:[。；;，,])?/g,
     /未找到[^。；;，,\n]*(?:[。；;，,])?/g,
@@ -119,7 +131,9 @@ const VERIFICATION_WARNING_PATTERNS = [
 ];
 
 const state = {
-    authToken: window.localStorage.getItem("ohmstash_token") || "",
+    authToken: browserSessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+        || window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+        || "",
     themeMode: readStoredThemeMode(),
     currentUser: null,
     apiKeys: [],
@@ -538,13 +552,16 @@ function clearCanvas(canvas) {
 
 function setAuthToken(token) {
     state.authToken = token;
-    window.localStorage.setItem("ohmstash_token", token);
+    browserSessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
 }
+
 
 function clearAuthToken() {
     state.authToken = "";
     state.currentUser = null;
-    window.localStorage.removeItem("ohmstash_token");
+    browserSessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
 }
 
 function showLoginModal(message = "") {
@@ -3970,6 +3987,8 @@ async function showBoxLabel(boxId) {
 
     preview.innerHTML = '<div class="empty-panel compact-empty">标签加载中…</div>';
     link.removeAttribute("href");
+    link.setAttribute("aria-disabled", "true");
+    link.setAttribute("tabindex", "-1");
     link.classList.add("disabled-link");
 
     try {
@@ -3984,6 +4003,8 @@ async function showBoxLabel(boxId) {
         preview.innerHTML = `<img src="${labelObjectUrls.svg}" alt="${escapeHtml(altText)}">`;
         link.href = labelObjectUrls.wdfx;
         link.download = `${box?.readable_id || "box"}-label.wdfx`;
+        link.removeAttribute("aria-disabled");
+        link.removeAttribute("tabindex");
         link.classList.remove("disabled-link");
     } catch (error) {
         preview.innerHTML = `<div class="empty-panel compact-empty">标签加载失败：${escapeHtml(error.message || "未知错误")}</div>`;
@@ -5832,11 +5853,15 @@ async function clearDatabase() {
     if (!firstConfirm) {
         return;
     }
-    const secondConfirm = window.confirm("请再次确认：此操作不可撤销，但会保留 AI/API 配置、账户和 API 密钥。");
-    if (!secondConfirm) {
+    const confirmation = window.prompt("请输入 CLEAR DATABASE 以确认清空数据库。");
+    if (confirmation !== "CLEAR DATABASE") {
+        showToast("清空数据库已取消");
         return;
     }
-    const result = await apiRequest("/system/database", {method: "DELETE"});
+    const result = await apiRequest("/system/database", {
+        method: "DELETE",
+        body: JSON.stringify({confirmation}),
+    });
     await refreshAll();
     showToast(`已清空：${result.deleted_boxes} 个盒子，${result.deleted_components} 个元器件`);
 }

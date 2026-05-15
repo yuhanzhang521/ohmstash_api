@@ -7,8 +7,14 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.api.v1.endpoints import ai as ai_endpoint
 from app.core.config import settings
-from app.services.component_naming import normalize_component_names_in_parsed_result
+from app.models.auth_user import AuthUser
 from app.services import recognition_prompt, vlm_client, web_search
+from app.services.component_naming import normalize_component_names_in_parsed_result
+
+
+def _admin_user_id(db: Session) -> int:
+    user = db.query(AuthUser).filter(AuthUser.username == "admin").one()
+    return int(user.id)
 
 
 def test_upsert_default_vlm_config_hides_api_key(client: TestClient) -> None:
@@ -434,7 +440,7 @@ def test_delete_finished_recognition_session(
 ) -> None:
     recognition_session = models.RecognitionSession(
         owner_kind="user",
-        owner_id=1,
+        owner_id=_admin_user_id(db),
         owner_name="admin",
         mode="single_image",
         status="succeeded",
@@ -532,7 +538,7 @@ def test_recognition_session_background_stores_verified_result(
 
     recognition_session = models.RecognitionSession(
         owner_kind="user",
-        owner_id=1,
+        owner_id=_admin_user_id(db),
         owner_name="admin",
         mode="single_image",
         status="queued",
