@@ -45,6 +45,17 @@ COMPONENT_NAME_RULE_TEXT = (
     "12V离心风扇要有 供电电压=12V、类型=离心风扇。"
 )
 
+SEARCH_RECOMMENDATION_RULE_TEXT = (
+    "search_recommended 表示识别后是否值得自动勾选联网搜索核对。"
+    "只有当联网搜索可能显著帮助确认具体型号、系列、模块板卡、芯片、传感器、风扇、舵机、开关、继电器、电机等器件时才返回 true。"
+    "基础阻容感、螺丝、线材、普通端子、线鼻子、连接器、保险丝等按规格即可入库的常见基础件返回 false，"
+    "即使它们有阻值、容值、电感值、封装、线径、规格或额定值也不要推荐联网搜索。"
+    "不要只因为 attributes 里有“型号”字段就返回 true，必须结合 OCR 读到的文字和器件类别判断这个搜索是否有实际核对价值。"
+    "例如 STM32F103C8T6、MAX98357A、SG90舵机、DHT22 温湿度传感器返回 true；"
+    "10K 0603、75pF 0603、10W 5欧姆水泥电阻、0.5-3线鼻子返回 false。"
+)
+
+
 GRID_COUNT_RULE_TEXT = (
     "规则网格必须按可见分隔线、格子边界和重复格子数量来数 rows 与 cols，"
     "不要根据整盒外轮廓长宽比猜测行列数。"
@@ -92,6 +103,7 @@ def build_component_recognition_prompt(
         "芯片可以选择型号；功能模块、传感器、风扇、舵机、端子等不要为了缩略显示改短 name。"
         "长型号允许在前端被省略号截断，不要为了缩略显示改短 name。\n\n"
         f"{COMPONENT_NAME_RULE_TEXT}\n\n"
+        f"{SEARCH_RECOMMENDATION_RULE_TEXT}\n\n"
         f"{NOTES_RULE_TEXT}\n\n"
         f"Tag 与属性库：\n{tag_catalog}\n\n"
         "请只返回一个 JSON 对象，不要返回 Markdown，不要额外解释。格式必须是：\n"
@@ -101,6 +113,7 @@ def build_component_recognition_prompt(
         '  "tags": ["贴片", "电阻"],\n'
         '  "attributes": {"封装": "0603", "阻值": "10K", "精度": "1%"},\n'
         '  "display_attribute": "阻值",\n'
+        '  "search_recommended": false,\n'
         '  "confidence": 0.82,\n'
         '  "notes": "可选说明"\n'
         "}\n"
@@ -149,6 +162,7 @@ def build_box_recognition_prompt(
         '      "tags": ["贴片", "电阻"],\n'
         '      "attributes": {"封装": "0603", "阻值": "10K"},\n'
         '      "display_attribute": "阻值",\n'
+        '      "search_recommended": false,\n'
         '      "confidence": 0.82,\n'
         '      "notes": "可选说明"\n'
         "    }\n"
@@ -191,6 +205,7 @@ def build_new_box_recognition_prompt(
         '      "tags": ["IC", "IC/电源芯片"],\n'
         '      "attributes": {"型号": "BQ24195RGER", "封装": "VQFN-24"},\n'
         '      "display_attribute": "型号",\n'
+        '      "search_recommended": true,\n'
         '      "confidence": 0.82,\n'
         '      "notes": "可选说明"\n'
         "    }\n"
@@ -268,6 +283,7 @@ def build_box_template_recognition_prompt(
         '      "tags": ["IC", "IC/电源芯片"],\n'
         '      "attributes": {"型号": "BQ24195RGER", "封装": "VQFN-24"},\n'
         '      "display_attribute": "型号",\n'
+        '      "search_recommended": true,\n'
         '      "confidence": 0.82,\n'
         '      "notes": "可选说明"\n'
         "    }\n"

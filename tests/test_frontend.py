@@ -331,7 +331,48 @@ def test_manage_grid_uses_scrollable_equal_width_columns() -> None:
     assert result["cementResistorTitle"] == "10W 5欧姆水泥电阻"
 
 
-def test_manage_select_all_ignores_empty_cells() -> None:
+def test_recognition_auto_verification_uses_search_recommendation_with_simple_fallback() -> None:
+    result = run_app_js_expression(
+        """
+        (() => {
+            return {
+                richRecommended: normalizeRecognitionCell({
+                    position_identifier: "R1C1",
+                    is_empty: false,
+                    name: "SG90舵机",
+                    tags: ["舵机"],
+                    search_recommended: true,
+                }, 0).verify_selected,
+                richNotRecommended: normalizeRecognitionCell({
+                    position_identifier: "R1C2",
+                    is_empty: false,
+                    name: "薄膜压力传感器",
+                    tags: ["传感器"],
+                    search_recommended: false,
+                }, 1).verify_selected,
+                simpleRecommended: normalizeRecognitionCell({
+                    position_identifier: "R1C3",
+                    is_empty: false,
+                    name: "10K 0603",
+                    tags: ["贴片", "电阻"],
+                    search_recommended: true,
+                }, 2).verify_selected,
+                missingRecommendation: normalizeRecognitionCell({
+                    position_identifier: "R1C4",
+                    is_empty: false,
+                    name: "DHT22温湿度传感器",
+                    tags: ["传感器"],
+                }, 3).verify_selected,
+            };
+        })()
+        """
+    )
+
+    assert result["richRecommended"] is True
+    assert result["richNotRecommended"] is False
+    assert result["simpleRecommended"] is False
+    assert result["missingRecommendation"] is False
+
     result = run_app_js_expression(
         """
         (() => {

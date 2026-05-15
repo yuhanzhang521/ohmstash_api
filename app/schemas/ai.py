@@ -41,6 +41,7 @@ class RecognizedCell(BaseModel):
     tags: List[str] = Field(default_factory=list)
     attributes: Dict[str, Any] = Field(default_factory=dict)
     display_attribute: Optional[str] = None
+    search_recommended: Optional[bool] = None
     confidence: Optional[float] = None
     notes: Optional[str] = None
     verification_warning: Optional[str] = None

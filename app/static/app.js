@@ -3015,6 +3015,7 @@ function normalizeRecognitionCell(cell, index) {
         tags: Array.isArray(cell.tags) ? cell.tags : [],
         attributes: cell.attributes && typeof cell.attributes === "object" ? cell.attributes : {},
         display_attribute: cell.display_attribute || "",
+        search_recommended: cell.search_recommended ?? null,
         confidence: cell.confidence ?? null,
         notes: stripVerificationPhrases(cell.notes || ""),
         verification_warning: warning,
@@ -3340,6 +3341,7 @@ function syncRecognitionCellsFromEditor() {
                 existingCell?.display_attribute || "",
             ),
             notes: card.querySelector('[data-field="notes"]').value.trim() || null,
+            search_recommended: existingCell?.search_recommended ?? null,
             verification_warning: existingCell?.verification_warning || "",
             layout_label: existingCell?.layout_label || "",
             stock_mode: quantityMode === "custom" ? "exact" : "fuzzy",
@@ -3372,25 +3374,7 @@ function shouldVerifyCell(cell) {
     if (simpleTerms.some((term) => text.includes(term))) {
         return false;
     }
-    const richTerms = [
-        "ic",
-        "芯片",
-        "mcu",
-        "mosfet",
-        "模块",
-        "传感器",
-        "sensor",
-        "电源芯片",
-        "运放",
-        "风扇",
-        "fan",
-        "开关",
-        "switch",
-        "继电器",
-        "电机",
-        "motor",
-    ];
-    return richTerms.some((term) => text.includes(term)) || /[a-z]{2,}\d{2,}/i.test(cell.name);
+    return cell.search_recommended === true;
 }
 
 function toggleRecognitionVerification() {
