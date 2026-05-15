@@ -26,7 +26,7 @@ from app.models.search_provider_config import (
 )
 from app.models.vlm_provider_config import VlmProviderConfig as VlmProviderConfigModel
 from app.services import auth
-from app.services import recognition_prompt, vlm_client, web_search
+from app.services import recognition_prompt, recognition_text_cleanup, vlm_client, web_search
 from app.services.component_naming import (
     normalize_component_names_in_parsed_result,
     normalize_recognized_cell_payload,
@@ -51,80 +51,6 @@ RECOGNITION_SESSION_MODES = {
     "new_box",
     "auto_template_box",
 }
-VERIFICATION_WARNING_PATTERNS = [
-    re.compile(r"未检索到[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"未找到[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"没有可确认[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"无法确认[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"搜索结果不足[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"(?:暂)?保留原标注"),
-]
-MODEL_CORRECTION_PATTERN = re.compile(
-    r"搜索结果指向\s*(?P<target>[^：:。；;，,\n]+)"
-    r"(?:[：:]\s*(?P<summary>[^。；;\n]+))?"
-    r"[。；;，,\s]*(?P<warning>原始[^。；;\n]*(?:疑似|可能)[^。；;\n]*)"
-)
-MODEL_MULTI_CORRECTION_PATTERN = re.compile(
-    r"搜索结果(?:主要)?指向\s*(?P<targets>[^。；;\n]+?)"
-    r"(?:等(?:其他)?型号)?[，,\s]*(?P<warning>原始[^。；;\n]*(?:疑似|可能|误差|抄写|识别)[^。；;\n]*)"
-)
-MODEL_CORRECTION_TARGET_PATTERN = re.compile(
-    r"搜索结果(?:主要)?指向\s*(?P<target>[^：:。；;，,\n]+)"
-)
-MODEL_TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9._/-]*\d[A-Za-z0-9._/-]*")
-ATTRIBUTE_UNCERTAINTY_PATTERNS = [
-    re.compile(r"[（(][^（）()]{0,30}(?:未能|不能|无法|不足|不确定|待确认|不同厂商|版本不一致)[^（）()]{0,40}[）)]"),
-    re.compile(r"(?:未能|不能|无法|不足|不确定|待确认|不同厂商|版本不一致)[^。；;，,\n]*"),
-]
-PHOTO_META_KEYWORDS = (
-    "拍摄角度",
-    "拍照角度",
-    "拍摄方向",
-    "拍摄环境",
-    "拍摄面",
-    "在画面",
-    "在图中",
-    "标签可见",
-    "标签显示",
-    "标签含",
-    "标签朝向",
-    "标签朝",
-    "标签清晰",
-    "标签上",
-    "标签为",
-    "标签是",
-    "标签写",
-    "竖放",
-    "横放",
-    "竖立",
-    "侧立",
-    "倒置",
-    "正面朝",
-    "背面朝",
-    "镜头",
-    "照片",
-    "图片中",
-    "字体",
-    "字号",
-    "印刷字",
-    "丝印",
-    "丝网",
-    "光线",
-    "阴影",
-    "反光",
-    "倾斜放置",
-    "斜放",
-    "高亮",
-    "包装袋",
-    "包装上",
-    "袋装",
-    "纸标签",
-)
-PHOTO_META_SENTENCE_PATTERN = re.compile(
-    r"[^。；;\n]*(?:"
-    + "|".join(re.escape(keyword) for keyword in PHOTO_META_KEYWORDS)
-    + r")[^。；;\n]*[。；;]?"
-)
 
 
 def _ensure_unique_config_name(
@@ -463,86 +389,16 @@ def _build_component_web_queries(
 
 
 def _extract_verification_warning(value: Any) -> Optional[str]:
-    text = str(value or "")
-    if not text:
-        return None
-    _note, correction_warning = _split_model_correction_note(text)
-    if correction_warning:
-        return correction_warning
-    multi_correction_warning = _extract_multi_correction_warning(text)
-    if multi_correction_warning:
-        return multi_correction_warning
-    warnings: List[str] = []
-    for pattern in VERIFICATION_WARNING_PATTERNS:
-        warnings.extend(match.group(0) for match in pattern.finditer(text))
-    if not warnings:
-        return None
-    warning = " ".join(warnings).strip("。；;，, \n\t")
-    return warning or "联网搜索未取得可确认资料，已保留原标注"
+    return recognition_text_cleanup.extract_verification_warning(value)
 
 
 def _clean_verification_notes(value: Any) -> Optional[str]:
-    text = str(value or "")
-    if not text:
-        return None
-    correction_note, _correction_warning = _split_model_correction_note(text)
-    if correction_note:
-        return _strip_photo_meta_phrases(correction_note) or None
-    text = _remove_multi_correction_warning(text)
-    for pattern in VERIFICATION_WARNING_PATTERNS:
-        text = pattern.sub("", text)
-    text = re.sub(r"(?:联网)?搜索摘要确认[:：]?\s*", "", text)
-    text = re.sub(r"联网确认[:：]?\s*", "", text)
-    text = _strip_photo_meta_phrases(text)
-    text = text.strip("。；;，, \n\t")
-    return text or None
-
-
-def _strip_photo_meta_phrases(value: Any) -> str:
-    text = str(value or "")
-    if not text:
-        return ""
-    cleaned = PHOTO_META_SENTENCE_PATTERN.sub("", text)
-    cleaned = re.sub(r"[\s。；;，,]+", lambda match: match.group(0)[0], cleaned)
-    return cleaned.strip("。；;，, \n\t")
+    return recognition_text_cleanup.clean_verification_notes(value)
 
 
 def _sanitize_recognition_notes(value: Any) -> Optional[str]:
-    text = _strip_photo_meta_phrases(value)
+    text = recognition_text_cleanup.strip_photo_meta_phrases(value)
     return text or None
-
-
-def _split_model_correction_note(value: Any) -> Tuple[Optional[str], Optional[str]]:
-    text = _normalize_search_value(value)
-    if not text or "搜索结果指向" not in text:
-        return None, None
-
-    match = MODEL_CORRECTION_PATTERN.search(text)
-    if not match:
-        return None, None
-
-    target = _normalize_search_value(match.group("target"))
-    summary = _normalize_search_value(match.group("summary"))
-    warning_tail = _normalize_search_value(match.group("warning"))
-    note = f"{target}：{summary}" if target and summary else None
-    warning = f"搜索结果指向 {target}，{warning_tail}" if target else warning_tail
-    return note, warning
-
-
-def _extract_multi_correction_warning(value: Any) -> Optional[str]:
-    text = _normalize_search_value(value)
-    if not text or "搜索结果" not in text:
-        return None
-    match = MODEL_MULTI_CORRECTION_PATTERN.search(text)
-    if not match:
-        return None
-    target_text = _normalize_search_value(match.group("targets")).rstrip("，, ")
-    warning_tail = _normalize_search_value(match.group("warning"))
-    return f"搜索结果主要指向 {target_text}，{warning_tail}" if target_text else warning_tail
-
-
-def _remove_multi_correction_warning(value: str) -> str:
-    return MODEL_MULTI_CORRECTION_PATTERN.sub("", value)
 
 
 def _extract_corrected_component_name(
@@ -550,78 +406,10 @@ def _extract_corrected_component_name(
     *,
     original_name: Optional[str] = None,
 ) -> Optional[str]:
-    text = str(value or "")
-    multi_match = MODEL_MULTI_CORRECTION_PATTERN.search(text)
-    if multi_match:
-        tokens = MODEL_TOKEN_PATTERN.findall(multi_match.group("targets"))
-        if tokens:
-            return _choose_corrected_token(tokens, original_name=original_name)
-
-    match = MODEL_CORRECTION_TARGET_PATTERN.search(text)
-    if match:
-        target = _normalize_search_value(match.group("target"))
-        tokens = MODEL_TOKEN_PATTERN.findall(target)
-        if tokens:
-            return _choose_corrected_token(tokens, original_name=original_name)
-        return target or None
-
-    if "搜索结果" not in text:
-        return None
-
-    tokens = MODEL_TOKEN_PATTERN.findall(text)
-    if tokens:
-        return _choose_corrected_token(tokens, original_name=original_name)
-    return None
-
-
-def _choose_corrected_token(
-    tokens: List[str],
-    *,
-    original_name: Optional[str] = None,
-) -> Optional[str]:
-    unique_tokens: List[str] = []
-    for token in tokens:
-        normalized_token = token.strip(".,;:，；：。")
-        if normalized_token and normalized_token not in unique_tokens:
-            unique_tokens.append(normalized_token)
-    if not unique_tokens:
-        return None
-
-    original = _normalize_search_value(original_name).upper()
-    if original:
-        for token in unique_tokens:
-            candidate = token.upper()
-            if len(candidate) == len(original) and candidate[1:] == original[1:]:
-                return token
-        close_tokens = [
-            token
-            for token in unique_tokens
-            if _edit_distance(token.upper(), original) <= 1
-            and token.upper() != original
-        ]
-        if close_tokens:
-            return close_tokens[-1]
-    return unique_tokens[-1]
-
-
-def _edit_distance(left: str, right: str) -> int:
-    if left == right:
-        return 0
-    if abs(len(left) - len(right)) > 1:
-        return 2
-    previous = list(range(len(right) + 1))
-    for left_index, left_char in enumerate(left, start=1):
-        current = [left_index]
-        for right_index, right_char in enumerate(right, start=1):
-            current.append(
-                min(
-                    previous[right_index] + 1,
-                    current[right_index - 1] + 1,
-                    previous[right_index - 1] + (left_char != right_char),
-                )
-            )
-        previous = current
-    return previous[-1]
+    return recognition_text_cleanup.extract_corrected_component_name(
+        value,
+        original_name=original_name,
+    )
 
 
 def _clean_verified_attributes(
@@ -639,7 +427,7 @@ def _clean_verified_attributes(
 
         clean_value = value
         value_warnings: List[str] = []
-        for pattern in ATTRIBUTE_UNCERTAINTY_PATTERNS:
+        for pattern in recognition_text_cleanup.ATTRIBUTE_UNCERTAINTY_PATTERNS:
             value_warnings.extend(match.group(0) for match in pattern.finditer(clean_value))
             clean_value = pattern.sub("", clean_value)
         clean_value = clean_value.strip("。；;，, \n\t")
@@ -1050,7 +838,7 @@ def _verify_component_items(
 
 
 @router.get("/vlm_config", response_model=schemas.VlmProviderConfig)
-def read_default_vlm_config(db: Session = Depends(deps.get_db)) -> Any:
+def read_default_vlm_config(db: Session = Depends(deps.get_db)) -> object:
     return _get_required_default_config(db=db)
 
 
@@ -1059,7 +847,7 @@ def upsert_default_vlm_config(
     *,
     db: Session = Depends(deps.get_db),
     config_in: schemas.VlmProviderConfigCreate,
-) -> Any:
+) -> object:
     default_config = crud.vlm_provider_config.get_default(db=db)
     if default_config:
         _ensure_unique_config_name(
@@ -1090,7 +878,7 @@ def test_default_vlm_config(
     *,
     db: Session = Depends(deps.get_db),
     test_in: Optional[schemas.VlmConnectionTestRequest] = None,
-) -> Any:
+) -> object:
     request_data = test_in or schemas.VlmConnectionTestRequest()
     config = (
         _build_transient_config(request_data.config)
@@ -1105,7 +893,7 @@ def create_vlm_config(
     *,
     db: Session = Depends(deps.get_db),
     config_in: schemas.VlmProviderConfigCreate,
-) -> Any:
+) -> object:
     _ensure_unique_config_name(db=db, name=config_in.name)
     return crud.vlm_provider_config.create(db=db, obj_in=config_in)
 
@@ -1115,14 +903,14 @@ def read_vlm_configs(
     db: Session = Depends(deps.get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-) -> Any:
+) -> object:
     return crud.vlm_provider_config.get_multi(db=db, skip=skip, limit=limit)
 
 
 @router.get("/vlm_configs/default", response_model=schemas.VlmProviderConfig)
 def read_default_vlm_config_from_collection(
     db: Session = Depends(deps.get_db),
-) -> Any:
+) -> object:
     return _get_required_default_config(db=db)
 
 
@@ -1135,7 +923,7 @@ def test_vlm_config(
     db: Session = Depends(deps.get_db),
     config_id: int,
     test_in: Optional[schemas.VlmConnectionTestRequest] = None,
-) -> Any:
+) -> object:
     request_data = test_in or schemas.VlmConnectionTestRequest()
     config = _get_vlm_config_for_use(db=db, config_id=config_id)
     return _run_vlm_test(config=config, prompt=request_data.prompt)
@@ -1146,7 +934,7 @@ def read_vlm_config(
     *,
     db: Session = Depends(deps.get_db),
     config_id: int,
-) -> Any:
+) -> object:
     config = crud.vlm_provider_config.get(db=db, id=config_id)
     if not config:
         raise HTTPException(status_code=404, detail="VLM config not found")
@@ -1159,7 +947,7 @@ def update_vlm_config(
     db: Session = Depends(deps.get_db),
     config_id: int,
     config_in: schemas.VlmProviderConfigUpdate,
-) -> Any:
+) -> object:
     config = crud.vlm_provider_config.get(db=db, id=config_id)
     if not config:
         raise HTTPException(status_code=404, detail="VLM config not found")
@@ -1180,7 +968,7 @@ def set_default_vlm_config(
     *,
     db: Session = Depends(deps.get_db),
     config_id: int,
-) -> Any:
+) -> object:
     config = crud.vlm_provider_config.get(db=db, id=config_id)
     if not config:
         raise HTTPException(status_code=404, detail="VLM config not found")
@@ -1192,7 +980,7 @@ def delete_vlm_config(
     *,
     db: Session = Depends(deps.get_db),
     config_id: int,
-) -> Any:
+) -> object:
     config = crud.vlm_provider_config.get(db=db, id=config_id)
     if not config:
         raise HTTPException(status_code=404, detail="VLM config not found")
@@ -1462,7 +1250,7 @@ def _merge_verified_items_into_parsed_result(
     *,
     parsed_result: Any,
     verified_items: List[schemas.RecognizedCell],
-) -> Any:
+) -> object:
     if not isinstance(parsed_result, dict):
         return parsed_result
 
@@ -1516,7 +1304,7 @@ def create_recognition_session(
     search_provider_config_id: Optional[int] = Form(None),
     additional_prompt: str = Form(""),
     overwrite_existing: bool = Form(False),
-) -> Any:
+) -> object:
     _validate_recognition_session_request(
         db=db,
         mode=mode,
@@ -1576,7 +1364,7 @@ def read_recognition_sessions(
     principal: auth.AuthPrincipal = Depends(deps.get_current_principal),
     skip: int = Query(0, ge=0),
     limit: int = Query(RECOGNITION_SESSION_HISTORY_LIMIT, ge=1, le=RECOGNITION_SESSION_HISTORY_LIMIT),
-) -> Any:
+) -> object:
     safe_limit = min(max(limit, 1), RECOGNITION_SESSION_HISTORY_LIMIT)
     safe_skip = max(skip, 0)
     return (
@@ -1601,7 +1389,7 @@ def read_recognition_session(
     db: Session = Depends(deps.get_db),
     principal: auth.AuthPrincipal = Depends(deps.get_current_principal),
     session_id: int,
-) -> Any:
+) -> object:
     return _get_owned_recognition_session(
         db=db,
         session_id=session_id,
@@ -1635,7 +1423,7 @@ def delete_recognition_session(
 def read_recognition_prompt(
     db: Session = Depends(deps.get_db),
     additional_prompt: str = "",
-) -> Any:
+) -> object:
     return {
         "prompt": recognition_prompt.build_component_recognition_prompt(
             db,
@@ -1651,7 +1439,7 @@ def recognize_image(
     file: UploadFile = File(...),
     config_id: Optional[int] = Form(None),
     additional_prompt: str = Form(""),
-) -> Any:
+) -> object:
     content = read_limited_upload(file)
     try:
         normalized_content, content_type = normalize_upload_image(file, content)
@@ -1680,7 +1468,7 @@ def recognize_box_image(
     box_id: int = Form(...),
     config_id: Optional[int] = Form(None),
     additional_prompt: str = Form(""),
-) -> Any:
+) -> object:
     box = crud.box.get(db=db, id=box_id)
     if not box:
         raise HTTPException(status_code=404, detail="Box not found")
@@ -1717,7 +1505,7 @@ def recognize_box_template_image(
     template_id: int = Form(...),
     config_id: Optional[int] = Form(None),
     additional_prompt: str = Form(""),
-) -> Any:
+) -> object:
     template = crud.box_template.get(db=db, id=template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Box template not found")
@@ -1756,7 +1544,7 @@ def recognize_box_layout_image(
     layout_type: str = Form("grid"),
     config_id: Optional[int] = Form(None),
     additional_prompt: str = Form(""),
-) -> Any:
+) -> object:
     if layout_type not in {"grid", "irregular"}:
         raise HTTPException(status_code=400, detail="Unsupported layout type")
 
@@ -1789,7 +1577,7 @@ def confirm_box_recognition(
     *,
     db: Session = Depends(deps.get_db),
     confirm_in: schemas.ConfirmBoxRecognitionRequest,
-) -> Any:
+) -> object:
     box = crud.box.get(db=db, id=confirm_in.box_id)
     if not box:
         raise HTTPException(status_code=404, detail="Box not found")
@@ -1812,7 +1600,7 @@ def confirm_auto_box_recognition(
     *,
     db: Session = Depends(deps.get_db),
     confirm_in: schemas.ConfirmAutoBoxRecognitionRequest,
-) -> Any:
+) -> object:
     template = crud.box_template.create(
         db=db,
         obj_in=schemas.BoxTemplateCreate(
@@ -1850,7 +1638,7 @@ def confirm_new_box_recognition(
     *,
     db: Session = Depends(deps.get_db),
     confirm_in: schemas.ConfirmNewBoxRecognitionRequest,
-) -> Any:
+) -> object:
     template = crud.box_template.get(db=db, id=confirm_in.template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Box template not found")
@@ -1882,5 +1670,5 @@ def verify_components(
     *,
     db: Session = Depends(deps.get_db),
     verify_in: schemas.ComponentVerificationRequest,
-) -> Any:
+) -> object:
     return _verify_component_items(db=db, verify_in=verify_in)

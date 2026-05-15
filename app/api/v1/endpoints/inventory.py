@@ -47,7 +47,7 @@ def create_inventory_item(
     *,
     db: Session = Depends(deps.get_db),
     inventory_in: schemas.InventoryCreate,
-) -> Any:
+) -> object:
     _validate_inventory_references(
         db,
         sub_box_id=inventory_in.sub_box_id,
@@ -75,7 +75,7 @@ def read_inventory_item(
     *,
     db: Session = Depends(deps.get_db),
     inventory_id: int,
-) -> Any:
+) -> object:
     inventory_item = crud.inventory.get(db=db, id=inventory_id)
     if not inventory_item:
         raise HTTPException(status_code=404, detail="Inventory item not found")
@@ -87,7 +87,7 @@ def read_inventory_items(
     db: Session = Depends(deps.get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-) -> Any:
+) -> object:
     inventory_items = crud.inventory.get_multi(db, skip=skip, limit=limit)
     return inventory_items
 
@@ -98,7 +98,7 @@ def update_inventory_item(
     db: Session = Depends(deps.get_db),
     inventory_id: int,
     inventory_in: schemas.InventoryUpdate,
-) -> Any:
+) -> object:
     inventory_item = crud.inventory.get(db=db, id=inventory_id)
     if not inventory_item:
         raise HTTPException(status_code=404, detail="Inventory item not found")
@@ -135,7 +135,7 @@ def delete_inventory_item(
     *,
     db: Session = Depends(deps.get_db),
     inventory_id: int,
-) -> Any:
+) -> object:
     inventory_item = crud.inventory.get(db=db, id=inventory_id)
     if not inventory_item:
         raise HTTPException(status_code=404, detail="Inventory item not found")

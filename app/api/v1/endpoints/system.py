@@ -1,5 +1,3 @@
-from typing import Any
-
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
@@ -20,7 +18,7 @@ from app.core.service_config import (
     save_server_config,
     schedule_restart,
 )
-from app.services import barcode_decoder
+from app.services import auth, barcode_decoder
 from app.services.image_upload import read_limited_upload
 
 router = APIRouter()
@@ -59,16 +57,16 @@ def read_system_health() -> dict[str, str]:
 
 @router.get("/config", response_model=schemas.ServerConfig)
 def read_system_config(
-    _principal: Any = Depends(deps.get_current_user_principal),
-) -> Any:
+    _principal: auth.AuthPrincipal = Depends(deps.get_current_user_principal),
+) -> object:
     return build_server_config_response()
 
 
 @router.put("/config", response_model=schemas.ServerConfig)
 def update_system_config(
     config_in: schemas.ServerConfigUpdate,
-    _principal: Any = Depends(deps.get_current_user_principal),
-) -> Any:
+    _principal: auth.AuthPrincipal = Depends(deps.get_current_user_principal),
+) -> object:
     try:
         save_server_config(
             host=config_in.host,
@@ -92,8 +90,8 @@ def update_system_config(
 
 @router.post("/restart", response_model=schemas.ServerRestartResponse)
 def restart_system(
-    _principal: Any = Depends(deps.get_current_user_principal),
-) -> Any:
+    _principal: auth.AuthPrincipal = Depends(deps.get_current_user_principal),
+) -> object:
     schedule_restart()
     return schemas.ServerRestartResponse(
         restarting=True,
@@ -103,8 +101,8 @@ def restart_system(
 
 @router.get("/logs/config", response_model=schemas.LoggingConfig)
 def read_logging_config(
-    _principal: Any = Depends(deps.get_current_user_principal),
-) -> Any:
+    _principal: auth.AuthPrincipal = Depends(deps.get_current_user_principal),
+) -> object:
     return schemas.LoggingConfig(
         level=get_runtime_log_level(),
         log_file_path=str(get_log_file_path()),
@@ -114,8 +112,8 @@ def read_logging_config(
 @router.put("/logs/config", response_model=schemas.LoggingConfig)
 def update_logging_config(
     config_in: schemas.LoggingConfigUpdate,
-    _principal: Any = Depends(deps.get_current_user_principal),
-) -> Any:
+    _principal: auth.AuthPrincipal = Depends(deps.get_current_user_principal),
+) -> object:
     requested_level = config_in.level.strip().upper()
     if requested_level not in VALID_LOG_LEVELS:
         raise HTTPException(status_code=400, detail="Unsupported log level")
@@ -129,8 +127,8 @@ def update_logging_config(
 @router.get("/logs", response_model=schemas.LogLinesResponse)
 def read_logs(
     limit: int = Query(300, ge=1, le=2000),
-    _principal: Any = Depends(deps.get_current_user_principal),
-) -> Any:
+    _principal: auth.AuthPrincipal = Depends(deps.get_current_user_principal),
+) -> object:
     lines, total_lines = read_log_lines(limit)
     return schemas.LogLinesResponse(
         level=get_runtime_log_level(),
@@ -141,7 +139,7 @@ def read_logs(
 
 
 @router.post("/decode_box_code", response_model=schemas.CodeDecodeResponse)
-def decode_box_code(file: UploadFile = File(...)) -> Any:
+def decode_box_code(file: UploadFile = File(...)) -> object:
     try:
         content = read_limited_upload(file)
     except ValueError as exc:
@@ -164,8 +162,8 @@ def decode_box_code(file: UploadFile = File(...)) -> Any:
 def clear_database(
     clear_in: schemas.DatabaseClearRequest | None = None,
     db: Session = Depends(deps.get_db),
-    _principal: Any = Depends(deps.get_current_user_principal),
-) -> Any:
+    _principal: auth.AuthPrincipal = Depends(deps.get_current_user_principal),
+) -> object:
     if clear_in is None:
         raise HTTPException(status_code=400, detail="Database clear confirmation is required")
     deleted_boxes = db.query(models.Box).count()

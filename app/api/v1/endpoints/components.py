@@ -1,9 +1,9 @@
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app import crud, schemas
+from app import crud, models, schemas
 from app.api import deps
 
 router = APIRouter()
@@ -14,7 +14,7 @@ def create_component(
     *,
     db: Session = Depends(deps.get_db),
     component_in: schemas.ComponentCreate,
-) -> Any:
+) -> models.Component:
     component = crud.component.create(db=db, obj_in=component_in)
     return component
 
@@ -25,7 +25,7 @@ def read_components(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     tag_ids: Optional[List[int]] = Query(None),
-) -> Any:
+) -> List[models.Component]:
     if tag_ids:
         components = crud.component.get_multi_by_tags(
             db=db,
@@ -44,7 +44,7 @@ def read_component(
     *,
     db: Session = Depends(deps.get_db),
     component_id: int,
-) -> Any:
+) -> models.Component:
     component = crud.component.get(db=db, id=component_id)
     if not component:
         raise HTTPException(status_code=404, detail="Component not found")
@@ -57,7 +57,7 @@ def update_component(
     db: Session = Depends(deps.get_db),
     component_id: int,
     component_in: schemas.ComponentUpdate,
-) -> Any:
+) -> models.Component:
     component = crud.component.get(db=db, id=component_id)
     if not component:
         raise HTTPException(status_code=404, detail="Component not found")
@@ -70,7 +70,7 @@ def delete_component(
     *,
     db: Session = Depends(deps.get_db),
     component_id: int,
-) -> Any:
+) -> models.Component:
     component = crud.component.get(db=db, id=component_id)
     if not component:
         raise HTTPException(status_code=404, detail="Component not found")

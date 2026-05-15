@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -17,7 +17,7 @@ def login(
     *,
     db: Session = Depends(deps.get_db),
     login_in: schemas.LoginRequest,
-) -> Any:
+) -> schemas.LoginResponse:
     user = auth_service.authenticate_user(
         db,
         username=login_in.username,
@@ -34,7 +34,7 @@ def login(
 @router.get("/me", response_model=schemas.CurrentUserResponse)
 def read_current_user(
     principal: auth_service.AuthPrincipal = Depends(deps.get_current_principal),
-) -> Any:
+) -> schemas.CurrentUserResponse:
     return schemas.CurrentUserResponse(username=principal.name)
 
 
@@ -44,7 +44,7 @@ def change_password(
     db: Session = Depends(deps.get_db),
     principal: auth_service.AuthPrincipal = Depends(deps.get_current_user_principal),
     password_in: schemas.PasswordChangeRequest,
-) -> Any:
+) -> schemas.CurrentUserResponse:
     user = db.query(AuthUser).filter(AuthUser.id == principal.id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -63,7 +63,7 @@ def change_password(
 def read_api_keys(
     db: Session = Depends(deps.get_db),
     _principal: auth_service.AuthPrincipal = Depends(deps.get_current_user_principal),
-) -> Any:
+) -> List[ApiKey]:
     return db.query(ApiKey).order_by(ApiKey.created_at.desc(), ApiKey.id.desc()).all()
 
 
@@ -73,7 +73,7 @@ def create_api_key(
     db: Session = Depends(deps.get_db),
     _principal: auth_service.AuthPrincipal = Depends(deps.get_current_user_principal),
     api_key_in: schemas.ApiKeyCreateRequest,
-) -> Any:
+) -> schemas.ApiKeyCreateResponse:
     api_key, raw_key = auth_service.create_api_key(db, name=api_key_in.name)
     return schemas.ApiKeyCreateResponse(
         id=api_key.id,
@@ -90,7 +90,7 @@ def delete_api_key(
     db: Session = Depends(deps.get_db),
     _principal: auth_service.AuthPrincipal = Depends(deps.get_current_user_principal),
     api_key_id: int,
-) -> Any:
+) -> schemas.ApiKeyResponse:
     api_key = db.query(ApiKey).filter(ApiKey.id == api_key_id).first()
     if not api_key:
         raise HTTPException(status_code=404, detail="API key not found")

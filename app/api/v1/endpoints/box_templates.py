@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
@@ -33,7 +33,7 @@ def create_box_template(
     *,
     db: Session = Depends(deps.get_db),
     box_template_in: schemas.BoxTemplateCreate,
-) -> Any:
+) -> object:
     box_template = crud.box_template.create(db=db, obj_in=box_template_in)
     return box_template
 
@@ -43,7 +43,7 @@ def read_box_templates(
     db: Session = Depends(deps.get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-) -> Any:
+) -> object:
     box_templates = crud.box_template.get_multi(db, skip=skip, limit=limit)
     return box_templates
 
@@ -53,7 +53,7 @@ def read_box_template(
     *,
     db: Session = Depends(deps.get_db),
     box_template_id: int,
-) -> Any:
+) -> object:
     box_template = crud.box_template.get(db=db, id=box_template_id)
     if not box_template:
         raise HTTPException(status_code=404, detail="Box template not found")
@@ -66,7 +66,7 @@ def update_box_template(
     db: Session = Depends(deps.get_db),
     box_template_id: int,
     box_template_in: schemas.BoxTemplateUpdate,
-) -> Any:
+) -> object:
     box_template = crud.box_template.get(db=db, id=box_template_id)
     if not box_template:
         raise HTTPException(status_code=404, detail="Box template not found")
@@ -87,7 +87,7 @@ def delete_box_template(
     *,
     db: Session = Depends(deps.get_db),
     box_template_id: int,
-) -> Any:
+) -> object:
     box_template = crud.box_template.get(db=db, id=box_template_id)
     if not box_template:
         raise HTTPException(status_code=404, detail="Box template not found")

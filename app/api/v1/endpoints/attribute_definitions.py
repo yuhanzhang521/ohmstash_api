@@ -1,4 +1,3 @@
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -14,7 +13,7 @@ def delete_attribute_definition(
     *,
     db: Session = Depends(deps.get_db),
     attribute_definition_id: int,
-) -> Any:
+) -> object:
     """
     Delete an attribute definition.
     """

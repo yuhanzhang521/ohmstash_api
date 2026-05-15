@@ -154,7 +154,7 @@ def _serialize_component_result(
 def test_search_provider_form(
     *,
     test_in: Optional[schemas.SearchProviderConnectionTestRequest] = None,
-) -> Any:
+) -> object:
     request_data = test_in or schemas.SearchProviderConnectionTestRequest()
     config = (
         _build_transient_search_config(request_data.config)
@@ -171,7 +171,7 @@ def create_search_provider_config(
     *,
     db: Session = Depends(deps.get_db),
     config_in: schemas.SearchProviderConfigCreate,
-) -> Any:
+) -> object:
     _validate_search_provider(config_in.provider)
     _ensure_unique_search_config_name(db=db, name=config_in.name)
     return crud.search_provider_config.create(db=db, obj_in=config_in)
@@ -182,14 +182,14 @@ def read_search_provider_configs(
     db: Session = Depends(deps.get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-) -> Any:
+) -> object:
     return crud.search_provider_config.get_multi(db=db, skip=skip, limit=limit)
 
 
 @router.get("/providers/default", response_model=schemas.SearchProviderConfig)
 def read_default_search_provider_config(
     db: Session = Depends(deps.get_db),
-) -> Any:
+) -> object:
     config = crud.search_provider_config.get_default(db=db)
     if not config:
         raise HTTPException(
@@ -204,7 +204,7 @@ def read_search_provider_config(
     *,
     db: Session = Depends(deps.get_db),
     config_id: int,
-) -> Any:
+) -> object:
     config = crud.search_provider_config.get(db=db, id=config_id)
     if not config:
         raise HTTPException(status_code=404, detail="Search provider config not found")
@@ -217,7 +217,7 @@ def update_search_provider_config(
     db: Session = Depends(deps.get_db),
     config_id: int,
     config_in: schemas.SearchProviderConfigUpdate,
-) -> Any:
+) -> object:
     config = crud.search_provider_config.get(db=db, id=config_id)
     if not config:
         raise HTTPException(status_code=404, detail="Search provider config not found")
@@ -247,7 +247,7 @@ def set_default_search_provider_config(
     *,
     db: Session = Depends(deps.get_db),
     config_id: int,
-) -> Any:
+) -> object:
     config = crud.search_provider_config.get(db=db, id=config_id)
     if not config:
         raise HTTPException(status_code=404, detail="Search provider config not found")
@@ -263,7 +263,7 @@ def test_search_provider_config(
     db: Session = Depends(deps.get_db),
     config_id: int,
     test_in: Optional[schemas.SearchProviderConnectionTestRequest] = None,
-) -> Any:
+) -> object:
     request_data = test_in or schemas.SearchProviderConnectionTestRequest()
     config = _get_search_provider_for_use(db=db, config_id=config_id)
     return _run_search_provider_test(config=config, query=request_data.query)
@@ -274,7 +274,7 @@ def delete_search_provider_config(
     *,
     db: Session = Depends(deps.get_db),
     config_id: int,
-) -> Any:
+) -> object:
     config = crud.search_provider_config.get(db=db, id=config_id)
     if not config:
         raise HTTPException(status_code=404, detail="Search provider config not found")
@@ -330,7 +330,7 @@ def keyword_search(
     db: Session = Depends(deps.get_db),
     q: str = Query("", min_length=0, max_length=200),
     limit: int = Query(50, ge=1, le=100),
-) -> Any:
+) -> object:
     return _search_components(db=db, query=q, limit=limit)
 
 
@@ -339,7 +339,7 @@ def semantic_search(
     *,
     db: Session = Depends(deps.get_db),
     search_in: schemas.SemanticSearchRequest,
-) -> Any:
+) -> object:
     if search_in.use_llm:
         return _semantic_search_with_llm(db=db, search_in=search_in)
 
@@ -459,7 +459,7 @@ def recommend_locations(
     *,
     db: Session = Depends(deps.get_db),
     recommendation_in: schemas.LocationRecommendationRequest,
-) -> Any:
+) -> object:
     occupied_sub_box_ids = {
         row[0]
         for row in db.query(models.Inventory.sub_box_id).distinct().all()

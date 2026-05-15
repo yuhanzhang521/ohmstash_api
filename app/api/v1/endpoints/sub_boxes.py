@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -15,7 +15,7 @@ def read_sub_boxes_for_box(
     db: Session = Depends(deps.get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-) -> Any:
+) -> object:
     """
     Retrieve sub-boxes for a specific box.
     """
@@ -33,7 +33,7 @@ def read_sub_box_by_readable_id(
     *,
     db: Session = Depends(deps.get_db),
     readable_id: str,
-) -> Any:
+) -> object:
     sub_box = (
         db.query(models.SubBox)
         .filter(models.SubBox.readable_id == readable_id)
@@ -49,7 +49,7 @@ def move_sub_box_inventory(
     *,
     db: Session = Depends(deps.get_db),
     move_in: schemas.MoveInventoryRequest,
-) -> Any:
+) -> object:
     source_sub_box = crud.sub_box.get(db=db, id=move_in.source_sub_box_id)
     target_sub_box = crud.sub_box.get(db=db, id=move_in.target_sub_box_id)
     if not source_sub_box or not target_sub_box:
@@ -91,7 +91,7 @@ def swap_sub_box_inventory(
     *,
     db: Session = Depends(deps.get_db),
     swap_in: schemas.SwapInventoryRequest,
-) -> Any:
+) -> object:
     first_sub_box = crud.sub_box.get(db=db, id=swap_in.first_sub_box_id)
     second_sub_box = crud.sub_box.get(db=db, id=swap_in.second_sub_box_id)
     if not first_sub_box or not second_sub_box:
@@ -127,7 +127,7 @@ def read_sub_box(
     *,
     db: Session = Depends(deps.get_db),
     sub_box_id: int,
-) -> Any:
+) -> object:
     """
     Get a specific sub-box by ID.
     """

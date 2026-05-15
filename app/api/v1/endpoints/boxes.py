@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.exc import IntegrityError
@@ -72,7 +72,7 @@ def create_box(
     *,
     db: Session = Depends(deps.get_db),
     box_in: schemas.BoxCreate,
-) -> Any:
+) -> object:
     template = crud.box_template.get(db=db, id=box_in.template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Box template not found")
@@ -86,7 +86,7 @@ def read_boxes(
     db: Session = Depends(deps.get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-) -> Any:
+) -> object:
     boxes = crud.box.get_multi(db, skip=skip, limit=limit)
     return boxes
 
@@ -96,7 +96,7 @@ def read_box_overview(
     *,
     db: Session = Depends(deps.get_db),
     box_id: int,
-) -> Any:
+) -> object:
     box = crud.box.get(db=db, id=box_id)
     if not box:
         raise HTTPException(status_code=404, detail="Box not found")
@@ -209,7 +209,7 @@ def read_box(
     *,
     db: Session = Depends(deps.get_db),
     box_id: int,
-) -> Any:
+) -> object:
     box = crud.box.get(db=db, id=box_id)
     if not box:
         raise HTTPException(status_code=404, detail="Box not found")
@@ -222,7 +222,7 @@ def update_box(
     db: Session = Depends(deps.get_db),
     box_id: int,
     box_in: schemas.BoxUpdate,
-) -> Any:
+) -> object:
     box = crud.box.get(db=db, id=box_id)
     if not box:
         raise HTTPException(status_code=404, detail="Box not found")
@@ -242,7 +242,7 @@ def delete_box(
     db: Session = Depends(deps.get_db),
     box_id: int,
     delete_components: bool = False,
-) -> Any:
+) -> object:
     box = crud.box.get(db=db, id=box_id)
     if not box:
         raise HTTPException(status_code=404, detail="Box not found")
