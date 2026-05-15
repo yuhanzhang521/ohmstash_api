@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -34,10 +35,19 @@ class ImageRecognitionResponse(BaseModel):
     latency_ms: int
 
 
+class ComponentTypeEnum(str, Enum):
+    PASSIVE = "PASSIVE"
+    IC = "IC"
+    MODULE = "MODULE"
+    OTHER = "OTHER"
+
+
 class RecognizedCell(BaseModel):
     position_identifier: str
     is_empty: bool = False
     name: Optional[str] = None
+    component_type: Optional[ComponentTypeEnum] = None
+    name_parts: Dict[str, Any] = Field(default_factory=dict)
     tags: List[str] = Field(default_factory=list)
     attributes: Dict[str, Any] = Field(default_factory=dict)
     display_attribute: Optional[str] = None

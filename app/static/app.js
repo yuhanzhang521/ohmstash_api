@@ -3012,6 +3012,8 @@ function normalizeRecognitionCell(cell, index) {
         position_identifier: cell.position_identifier || cell.id || `#${index + 1}`,
         is_empty: Boolean(cell.is_empty),
         name: cell.name || "",
+        component_type: cell.component_type || "",
+        name_parts: cell.name_parts && typeof cell.name_parts === "object" ? cell.name_parts : {},
         tags: Array.isArray(cell.tags) ? cell.tags : [],
         attributes: cell.attributes && typeof cell.attributes === "object" ? cell.attributes : {},
         display_attribute: cell.display_attribute || "",
@@ -3369,10 +3371,14 @@ function shouldVerifyCell(cell) {
     if (cell.is_empty || !cell.name) {
         return false;
     }
-    const text = `${cell.name} ${(cell.tags || []).join(" ")}`.toLowerCase();
-    const simpleTerms = ["电阻", "resistor", "电容", "capacitor", "电感", "连接器", "connector", "螺丝", "screw"];
-    if (simpleTerms.some((term) => text.includes(term))) {
+    if (cell.component_type === "PASSIVE") {
         return false;
+    }
+    if (cell.component_type === "IC") {
+        return true;
+    }
+    if (cell.component_type === "MODULE") {
+        return Boolean(String(cell.name_parts?.model || "").trim());
     }
     return cell.search_recommended === true;
 }

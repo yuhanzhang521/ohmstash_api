@@ -679,6 +679,7 @@ def _build_verification_prompt(
         "如果搜索摘要不足以确认某个字段，请保留原值，不要编造。\n"
         "如果搜索结果明显指向另一个标准型号，说明原始识别可能有误，请把 name 和 attributes.型号 更新为可确认的标准型号；"
         "例如原始 IPS5450 但资料主要指向 TPS5450 时，应改为 TPS5450。\n"
+        f"{recognition_prompt.COMPONENT_TYPE_RULE_TEXT}\n"
         f"{recognition_prompt.COMPONENT_NAME_RULE_TEXT}\n"
         "display_attribute 必须保留或更新为 attributes 中最适合缩略显示的属性名，"
         "阻容感优先使用阻值、容值或电感值，芯片类通常使用型号。\n"
@@ -689,6 +690,7 @@ def _build_verification_prompt(
         "如果没有检索到足够资料，请把原因写入 verification_warning，notes 保持为空或只保留器件说明。\n"
         "请只返回 JSON 对象，格式为：\n"
         '{"items": [{"position_identifier": "R1C1", "is_empty": false, '
+        '"component_type": "IC", "name_parts": {"model": "BQ24195RGER"}, '
         '"name": "BQ24195RGER", "tags": ["IC", "IC/电源芯片"], '
         '"attributes": {"型号": "BQ24195RGER", "封装": "VQFN-24", '
         '"功能": "单节锂电池充电管理"}, "confidence": 0.9, '
@@ -1452,43 +1454,7 @@ def _extract_default_verification_items(
 def _should_verify_recognized_cell(cell: schemas.RecognizedCell) -> bool:
     if cell.is_empty or not cell.name:
         return False
-
-    text = f"{cell.name} {' '.join(cell.tags or [])}".lower()
-    simple_terms = (
-        "电阻",
-        "resistor",
-        "电容",
-        "capacitor",
-        "电感",
-        "连接器",
-        "connector",
-        "螺丝",
-        "screw",
-    )
-    if any(term in text for term in simple_terms):
-        return False
-
-    rich_terms = (
-        "ic",
-        "芯片",
-        "mcu",
-        "mosfet",
-        "模块",
-        "传感器",
-        "sensor",
-        "电源芯片",
-        "运放",
-        "风扇",
-        "fan",
-        "开关",
-        "switch",
-        "继电器",
-        "电机",
-        "motor",
-    )
-    return any(term in text for term in rich_terms) or bool(
-        re.search(r"[a-z]{2,}\d{2,}", cell.name, re.IGNORECASE),
-    )
+    return cell.search_recommended is True
 
 
 def _merge_verified_items_into_parsed_result(

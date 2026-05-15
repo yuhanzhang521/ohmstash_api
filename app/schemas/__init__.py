@@ -19,6 +19,7 @@ from .component import Component, ComponentCreate, ComponentUpdate
 from .inventory import Inventory, InventoryCreate, InventoryUpdate
 from .sub_box import SubBox, SubBoxCreate, SubBoxUpdate
 from .ai import (
+    ComponentTypeEnum,
     ComponentVerificationRequest,
     ComponentVerificationResponse,
     ConfirmAutoBoxRecognitionRequest,

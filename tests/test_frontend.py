@@ -110,6 +110,7 @@ def run_app_js_expression(expression: str) -> Any:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     return json.loads(completed.stdout)
 
@@ -331,47 +332,59 @@ def test_manage_grid_uses_scrollable_equal_width_columns() -> None:
     assert result["cementResistorTitle"] == "10W 5欧姆水泥电阻"
 
 
-def test_recognition_auto_verification_uses_search_recommendation_with_simple_fallback() -> None:
+def test_recognition_auto_verification_uses_component_type_protocol() -> None:
     result = run_app_js_expression(
         """
         (() => {
             return {
-                richRecommended: normalizeRecognitionCell({
+                passive: normalizeRecognitionCell({
                     position_identifier: "R1C1",
                     is_empty: false,
-                    name: "SG90舵机",
-                    tags: ["舵机"],
+                    name: "0603 10K",
+                    component_type: "PASSIVE",
+                    name_parts: {package: "0603", value: "10K"},
                     search_recommended: true,
                 }, 0).verify_selected,
-                richNotRecommended: normalizeRecognitionCell({
+                ic: normalizeRecognitionCell({
                     position_identifier: "R1C2",
                     is_empty: false,
-                    name: "薄膜压力传感器",
-                    tags: ["传感器"],
+                    name: "STM32F103C8T6",
+                    component_type: "IC",
+                    name_parts: {model: "STM32F103C8T6"},
                     search_recommended: false,
                 }, 1).verify_selected,
-                simpleRecommended: normalizeRecognitionCell({
+                moduleWithModel: normalizeRecognitionCell({
                     position_identifier: "R1C3",
                     is_empty: false,
-                    name: "10K 0603",
-                    tags: ["贴片", "电阻"],
-                    search_recommended: true,
+                    name: "ESP32S3开发板",
+                    component_type: "MODULE",
+                    name_parts: {model: "ESP32S3", suffix: "开发板"},
                 }, 2).verify_selected,
-                missingRecommendation: normalizeRecognitionCell({
+                moduleWithoutModel: normalizeRecognitionCell({
                     position_identifier: "R1C4",
                     is_empty: false,
-                    name: "DHT22温湿度传感器",
-                    tags: ["传感器"],
+                    name: "红外感应模块",
+                    component_type: "MODULE",
+                    name_parts: {function: "红外感应模块"},
+                    search_recommended: true,
                 }, 3).verify_selected,
+                otherExplicit: normalizeRecognitionCell({
+                    position_identifier: "R1C5",
+                    is_empty: false,
+                    name: "电子工具",
+                    component_type: "OTHER",
+                    search_recommended: true,
+                }, 4).verify_selected,
             };
         })()
         """
     )
 
-    assert result["richRecommended"] is True
-    assert result["richNotRecommended"] is False
-    assert result["simpleRecommended"] is False
-    assert result["missingRecommendation"] is False
+    assert result["passive"] is False
+    assert result["ic"] is True
+    assert result["moduleWithModel"] is True
+    assert result["moduleWithoutModel"] is False
+    assert result["otherExplicit"] is True
 
     result = run_app_js_expression(
         """

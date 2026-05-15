@@ -21,38 +21,60 @@ NOTES_RULE_TEXT = (
     "看不到或不确定的，notes 留空。"
 )
 
+COMPONENT_TYPE_RULE_TEXT = (
+    "component_type 必须由你结合标签文字与图片实物判断，只能返回 PASSIVE、IC、MODULE、OTHER 之一，不能省略。"
+    "PASSIVE 仅用于普通两端基础阻容感（电阻、电容、电感）；"
+    "水泥电阻、保险电阻、热敏电阻、压敏电阻、磁珠、变压器、扼流圈等带功能/类别词的特种被动元件不归 PASSIVE，归 OTHER。"
+    "IC 是有完整丝印型号的芯片、集成电路或裸芯片。"
+    "MODULE 是模块、模组、开发板、传感器模块、电源模块、带功能电路的板卡（多为 PCB 加多元件的形态）。"
+    "OTHER 涵盖一切非阻容感、非芯片、非模块的实体：传感器探头、舵机、风扇、喇叭、按键、显示屏、连接器、端子/线鼻子、五金件、特种电阻、电池、工具等。"
+)
+
 COMPONENT_NAME_RULE_TEXT = (
-    "name 必须让人一眼看出器件是什么，必须读取整张标签，不要默认使用第一行或最大字号文字。"
-    "如果标签分多行，下面一行常常是器件类别或核心型号，必须和第一行一起判断。"
-    "基础贴片阻容感优先使用“数值 + 封装”作为 name，"
-    "其中封装只用于贴片元件，插件元件不要强行写封装，例如 10k 0603。"
-    "水泥电阻等非贴片专用器件必须保留具体类型，不能写成贴片电阻或只写阻值。"
-    "集成电路、裸芯片优先提取完整型号作为 name，"
-    "例如 STM32F103C8T6、MAX98357A。"
-    "功能模块、机电件、组件、风扇、传感器、开关、端子、线鼻子等 name 必须包含功能性名词；"
-    "如果一行是参数、另一行是器件名词，请合成一个简洁名称或优先使用器件名词，"
-    "不得只把 5015、223B、5g-1kg、0.5-3 这类参数或代码当作 name。"
-    "风扇优先保留电压和功能名词，舵机优先保留型号和功能名词，"
-    "线鼻子优先保留规格和器件名词，水泥电阻优先保留功率、阻值和具体类型。"
-    "例如“12V 5015 / 离心风扇”应写为“12V离心风扇”，"
-    "“舵机 / SG90”应写为“SG90舵机”，"
-    "“5g-1kg / 薄膜压力传感器”应写为“薄膜压力传感器”，"
-    "“0.5-3 / 线鼻子”应写为“0.5-3线鼻子”，"
-    "“10W 5欧姆 / 水泥电阻”应写为“10W 5欧姆水泥电阻”，"
-    "“223B 触摸开关模块”应写为“触摸开关模块”。"
-    "name 和 attributes 不互斥：name 中出现过的型号、功能名词和关键参数，"
-    "attributes 中仍必须保留对应字段，例如 SG90舵机要有 型号=SG90、类型=舵机；"
-    "12V离心风扇要有 供电电压=12V、类型=离心风扇。"
+    "name 必须能让人一眼看出器件是什么；除 IC 用纯型号外，name 中必须出现器件类别词或功能词"
+    "（如 电阻、电容、电感、芯片、模块、开发板、舵机、风扇、传感器、端子、线鼻子、喇叭、按键、显示屏、变压器 等）。"
+    "必须读取整张标签的所有文字行：标签上常常一行是参数（电压、电流、阻值、容值、量程、尺寸代号），"
+    "另一行是器件类别词或型号；不能默认只用第一行或最大字号那一行。"
+    "供电电压（如 12V、5V）、阻值、量程、规格代号本身不能作为器件名称的全部，"
+    "也不能填到 name_parts.model；它们只能进入 attributes，必要时作为 name 的辅助参数。"
+    "\n"
+    "PASSIVE 命名规则：name_parts 必须含 value（阻值/容值/电感值）；贴片件还要含 package（如 0603），"
+    "插件件 package 留空。最终 name 使用“封装 + 数值”或纯数值，不要把精度、电压、温漂等次要参数塞进 name。"
+    "示例：name=\"0603 10K\"、name=\"10uF\"。"
+    "\n"
+    "IC 命名规则：name_parts.model 必须填完整丝印型号；name 直接等于该型号，"
+    "不要把封装、丝印位置、批号或功能描述当作 name。示例：name=\"STM32F103C8T6\"、name=\"BQ24195RGER\"。"
+    "\n"
+    "MODULE 命名规则：从所有标签文字中识别真正的型号（通常是字母加数字组合，如 ESP32S3、SG90、TTP223B、PAM8403、HLK-LD1020、5015），"
+    "供电电压、电流不是型号。name_parts 必须含 function（中文功能/类别词，如 开发板、舵机、模块、风扇、传感器、功放模块）。"
+    "若识别到型号则填 name_parts.model 和 name_parts.suffix（=function 对应的功能后缀），"
+    "最终 name=\"model + suffix\"，model 与 suffix 之间不加空格；"
+    "若没有可靠型号，model 留空，name 直接等于 function。"
+    "示例：标签“SG90舵机” → model=\"SG90\"、suffix=\"舵机\"、name=\"SG90舵机\"；"
+    "标签“12V 5015 离心风扇” → model=\"5015\"、suffix=\"离心风扇\"、name=\"5015离心风扇\"，attributes.供电电压=\"12V\"；"
+    "标签“PAM8403 5V 功放模块” → model=\"PAM8403\"、suffix=\"功放模块\"、name=\"PAM8403功放模块\"，attributes.供电电压=\"5V\"；"
+    "标签“继电器模块” → model 留空、function=\"继电器模块\"、name=\"继电器模块\"。"
+    "\n"
+    "OTHER 命名规则：name_parts 必须含 function（器件类别词，如 水泥电阻、薄膜压力传感器、线鼻子、端子、喇叭、按键、网络变压器）；"
+    "如果标签还有规格/参数，另填 name_parts.spec，最终 name=\"function + 空格 + spec\"；"
+    "若有可识别型号字符串，填 name_parts.model，最终 name=\"function + 空格 + model\"。"
+    "name 中必须出现 function（类别词），绝不能只用纯参数当 name。"
+    "示例：标签“10W 5欧姆 水泥电阻” → function=\"水泥电阻\"、spec=\"10W 5Ω\"、name=\"水泥电阻 10W 5Ω\"，"
+    "attributes 写入 功率=\"10W\"、阻值=\"5Ω\"、类型=\"水泥电阻\"；"
+    "标签“5g-1kg 薄膜压力传感器” → function=\"薄膜压力传感器\"、spec=\"5g-1kg\"、name=\"薄膜压力传感器 5g-1kg\"，"
+    "attributes 写入 量程=\"5g-1kg\"；"
+    "标签“0.5-3 线鼻子” → function=\"线鼻子\"、spec=\"0.5-3\"、name=\"线鼻子 0.5-3\"，attributes 写入 规格=\"0.5-3\"。"
+    "\n"
+    "name 和 attributes 不互斥：name_parts 中的型号、功能名词和关键参数，attributes 中仍必须保留对应字段。"
+    "tags 必须忠实于实际器件形态，不要给水泥电阻或插件电阻打上“贴片”，不要给非贴片器件打上“贴片”。"
 )
 
 SEARCH_RECOMMENDATION_RULE_TEXT = (
-    "search_recommended 表示识别后是否值得自动勾选联网搜索核对。"
-    "只有当联网搜索可能显著帮助确认具体型号、系列、模块板卡、芯片、传感器、风扇、舵机、开关、继电器、电机等器件时才返回 true。"
-    "基础阻容感、螺丝、线材、普通端子、线鼻子、连接器、保险丝等按规格即可入库的常见基础件返回 false，"
-    "即使它们有阻值、容值、电感值、封装、线径、规格或额定值也不要推荐联网搜索。"
-    "不要只因为 attributes 里有“型号”字段就返回 true，必须结合 OCR 读到的文字和器件类别判断这个搜索是否有实际核对价值。"
-    "例如 STM32F103C8T6、MAX98357A、SG90舵机、DHT22 温湿度传感器返回 true；"
-    "10K 0603、75pF 0603、10W 5欧姆水泥电阻、0.5-3线鼻子返回 false。"
+    "search_recommended 由 component_type 和 name_parts 决定。"
+    "component_type=PASSIVE 时一律返回 false。"
+    "component_type=IC 时一律返回 true。"
+    "component_type=MODULE 时，name_parts.model 非空才返回 true，否则 false。"
+    "component_type=OTHER 时，name_parts.model 非空才返回 true，否则 false（除非用户补充要求明确需要联网核对）。"
 )
 
 
@@ -99,9 +121,10 @@ def build_component_recognition_prompt(
         "display_attribute 必须是 attributes 中适合作为辅助缩略信息的属性名，不是主标题。"
         "主标题必须写在 name 中，并优先表达器件是什么；display_attribute 不能让 name 丢失器件类别。"
         "阻容感优先选择阻值、容值或电感值，例如名称为 0603 75pF 50V 10% 时，"
-        "attributes 写入容值=75pF 且 display_attribute 写入容值。"
-        "芯片可以选择型号；功能模块、传感器、风扇、舵机、端子等不要为了缩略显示改短 name。"
+        "attributes 写入容值=75pF、封装=0603，display_attribute 写入容值。"
+        "芯片可以选择型号；模块模组可以选择型号或功能；不要为了缩略显示改短 name。"
         "长型号允许在前端被省略号截断，不要为了缩略显示改短 name。\n\n"
+        f"{COMPONENT_TYPE_RULE_TEXT}\n\n"
         f"{COMPONENT_NAME_RULE_TEXT}\n\n"
         f"{SEARCH_RECOMMENDATION_RULE_TEXT}\n\n"
         f"{NOTES_RULE_TEXT}\n\n"
@@ -109,7 +132,9 @@ def build_component_recognition_prompt(
         "请只返回一个 JSON 对象，不要返回 Markdown，不要额外解释。格式必须是：\n"
         "{\n"
         '  "is_empty": false,\n'
-        '  "name": "10K 0603 1%",\n'
+        '  "component_type": "PASSIVE",\n'
+        '  "name_parts": {"package": "0603", "value": "10K"},\n'
+        '  "name": "0603 10K 1%",\n'
         '  "tags": ["贴片", "电阻"],\n'
         '  "attributes": {"封装": "0603", "阻值": "10K", "精度": "1%"},\n'
         '  "display_attribute": "阻值",\n'
@@ -158,7 +183,9 @@ def build_box_recognition_prompt(
         "    {\n"
         '      "position_identifier": "R1C1",\n'
         '      "is_empty": false,\n'
-        '      "name": "10K 0603 1%",\n'
+        '      "component_type": "PASSIVE",\n'
+        '      "name_parts": {"package": "0603", "value": "10K"},\n'
+        '      "name": "0603 10K 1%",\n'
         '      "tags": ["贴片", "电阻"],\n'
         '      "attributes": {"封装": "0603", "阻值": "10K"},\n'
         '      "display_attribute": "阻值",\n'
@@ -201,6 +228,8 @@ def build_new_box_recognition_prompt(
         "    {\n"
         '      "position_identifier": "R1C1",\n'
         '      "is_empty": false,\n'
+        '      "component_type": "IC",\n'
+        '      "name_parts": {"model": "BQ24195RGER"},\n'
         '      "name": "BQ24195RGER",\n'
         '      "tags": ["IC", "IC/电源芯片"],\n'
         '      "attributes": {"型号": "BQ24195RGER", "封装": "VQFN-24"},\n'
@@ -279,6 +308,8 @@ def build_box_template_recognition_prompt(
         "    {\n"
         '      "position_identifier": "R1C1",\n'
         '      "is_empty": false,\n'
+        '      "component_type": "IC",\n'
+        '      "name_parts": {"model": "BQ24195RGER"},\n'
         '      "name": "BQ24195RGER",\n'
         '      "tags": ["IC", "IC/电源芯片"],\n'
         '      "attributes": {"型号": "BQ24195RGER", "封装": "VQFN-24"},\n'

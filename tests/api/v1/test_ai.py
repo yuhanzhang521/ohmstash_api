@@ -63,12 +63,13 @@ def test_recognition_and_verification_prompts_include_name_rules(
     assert response.status_code == 200
     prompt = response.json()["prompt"]
 
-    assert recognition_prompt.COMPONENT_NAME_RULE_TEXT in prompt
-    assert "12V离心风扇" in prompt
-    assert "SG90舵机" in prompt
-    assert "薄膜压力传感器" in prompt
-    assert "触摸开关模块" in prompt
-    assert "name 和 attributes 不互斥" in prompt
+    assert recognition_prompt.COMPONENT_TYPE_RULE_TEXT in prompt
+    assert "只能返回 PASSIVE、IC、MODULE、OTHER" in prompt
+    assert "PASSIVE 命名规则" in prompt
+    assert "IC 命名规则" in prompt
+    assert "MODULE 命名规则" in prompt
+    assert "OTHER 命名规则" in prompt
+    assert "name_parts" in prompt
 
     verification_prompt = ai_endpoint._build_verification_prompt(
         items=[
@@ -83,51 +84,97 @@ def test_recognition_and_verification_prompts_include_name_rules(
     assert recognition_prompt.COMPONENT_NAME_RULE_TEXT in verification_prompt
 
 
-def test_component_name_normalization_prefers_function_nouns() -> None:
+def test_component_name_normalization_keeps_ai_provided_name() -> None:
     normalized = normalize_component_names_in_parsed_result(
         {
             "cells": [
                 {
                     "position_identifier": "R1C1",
                     "is_empty": False,
-                    "name": "12V 5015",
-                    "tags": ["风扇"],
-                    "attributes": {"规格": "5015", "供电电压": "12V", "类型": "离心风扇"},
+                    "component_type": "MODULE",
+                    "name": "SG90舵机",
+                    "name_parts": {
+                        "model": "SG90",
+                        "suffix": "舵机",
+                        "function": "舵机",
+                    },
+                    "tags": [],
+                    "attributes": {},
                 },
                 {
                     "position_identifier": "R1C2",
                     "is_empty": False,
-                    "name": "5g-1kg",
-                    "tags": ["传感器"],
-                    "attributes": {"量程": "5g-1kg", "类型": "薄膜压力传感器"},
+                    "component_type": "OTHER",
+                    "name": "水泥电阻 10W 5Ω",
+                    "name_parts": {"function": "水泥电阻", "spec": "10W 5Ω"},
+                    "tags": ["电阻"],
+                    "attributes": {"功率": "10W", "阻值": "5Ω"},
+                },
+            ]
+        }
+    )
+
+    assert normalized
+    names = [cell["name"] for cell in normalized["cells"]]
+    assert names == ["SG90舵机", "水泥电阻 10W 5Ω"]
+    assert normalized["cells"][0]["attributes"]["型号"] == "SG90"
+    assert normalized["cells"][0]["attributes"]["功能"] == "舵机"
+    assert normalized["cells"][0]["search_recommended"] is True
+    assert normalized["cells"][1]["search_recommended"] is False
+
+
+def test_component_name_normalization_falls_back_when_name_missing() -> None:
+    normalized = normalize_component_names_in_parsed_result(
+        {
+            "cells": [
+                {
+                    "position_identifier": "R1C1",
+                    "is_empty": False,
+                    "component_type": "MODULE",
+                    "name": "",
+                    "name_parts": {
+                        "model": "ESP32S3",
+                        "suffix": "开发板",
+                        "function": "开发板",
+                    },
+                    "tags": [],
+                    "attributes": {},
+                },
+                {
+                    "position_identifier": "R1C2",
+                    "is_empty": False,
+                    "component_type": "MODULE",
+                    "name": "",
+                    "name_parts": {"function": "红外感应模块"},
+                    "tags": [],
+                    "attributes": {},
                 },
                 {
                     "position_identifier": "R1C3",
                     "is_empty": False,
-                    "name": "223B 触摸开关模块",
-                    "tags": ["模块"],
-                    "attributes": {},
+                    "component_type": "PASSIVE",
+                    "name": "",
+                    "name_parts": {"package": "0603", "value": "10k"},
+                    "tags": [],
+                    "attributes": {"精度": "1%"},
                 },
                 {
                     "position_identifier": "R1C4",
                     "is_empty": False,
-                    "name": "舵机 SG90",
-                    "tags": ["舵机"],
-                    "attributes": {},
+                    "component_type": "IC",
+                    "name": "",
+                    "name_parts": {"model": "STM32F103C8T6"},
+                    "tags": [],
+                    "attributes": {"封装": "LQFP-48"},
                 },
                 {
                     "position_identifier": "R1C5",
                     "is_empty": False,
-                    "name": "0.5-3",
-                    "tags": ["端子"],
-                    "attributes": {"规格": "0.5-3", "类型": "线鼻子"},
-                },
-                {
-                    "position_identifier": "R1C6",
-                    "is_empty": False,
-                    "name": "5欧姆",
-                    "tags": ["电阻"],
-                    "attributes": {"功率": "10W", "阻值": "5欧姆", "类型": "水泥电阻"},
+                    "component_type": "OTHER",
+                    "name": "",
+                    "name_parts": {"function": "线鼻子", "spec": "0.5-3"},
+                    "tags": [],
+                    "attributes": {},
                 },
             ]
         }
@@ -136,44 +183,17 @@ def test_component_name_normalization_prefers_function_nouns() -> None:
     assert normalized
     names = [cell["name"] for cell in normalized["cells"]]
     assert names == [
-        "12V离心风扇",
-        "薄膜压力传感器",
-        "触摸开关模块",
-        "SG90舵机",
-        "0.5-3线鼻子",
-        "10W 5欧姆水泥电阻",
+        "ESP32S3开发板",
+        "红外感应模块",
+        "0603 10k",
+        "STM32F103C8T6",
+        "线鼻子 0.5-3",
     ]
-    assert normalized["cells"][0]["attributes"]["供电电压"] == "12V"
-    assert normalized["cells"][0]["attributes"]["类型"] == "离心风扇"
-    assert normalized["cells"][3]["attributes"]["型号"] == "SG90"
-    assert normalized["cells"][3]["attributes"]["类型"] == "舵机"
-
-
-def test_component_name_normalization_formats_passive_and_ic_names() -> None:
-    normalized = normalize_component_names_in_parsed_result(
-        {
-            "cells": [
-                {
-                    "position_identifier": "R1C1",
-                    "is_empty": False,
-                    "name": "10k 0603 1%",
-                    "tags": ["电阻", "贴片"],
-                    "attributes": {"阻值": "10k", "封装": "0603", "精度": "1%"},
-                },
-                {
-                    "position_identifier": "R1C2",
-                    "is_empty": False,
-                    "name": "STM32 芯片",
-                    "tags": ["IC"],
-                    "attributes": {"型号": "STM32F103C8T6", "封装": "LQFP-48"},
-                },
-            ]
-        }
-    )
-
-    assert normalized
-    names = [cell["name"] for cell in normalized["cells"]]
-    assert names == ["10k 0603", "STM32F103C8T6"]
+    assert normalized["cells"][0]["search_recommended"] is True
+    assert normalized["cells"][1]["search_recommended"] is False
+    assert normalized["cells"][2]["search_recommended"] is False
+    assert normalized["cells"][3]["search_recommended"] is True
+    assert normalized["cells"][4]["search_recommended"] is False
 
 
 def test_upsert_default_vlm_config_preserves_existing_api_key(
@@ -300,7 +320,7 @@ def test_recognize_image_returns_parsed_result(
                     {
                         "message": {
                             "content": (
-                                '{"is_empty": false, "name": "10K 0603", '
+                                '{"is_empty": false, "name": "0603 10K", '
                                 '"tags": ["电阻"], "attributes": {"阻值": "10K"}}'
                             )
                         }
@@ -335,7 +355,7 @@ def test_recognize_image_returns_parsed_result(
     content = response.json()
     assert content["filename"] == "part.png"
     assert content["latency_ms"] == 21
-    assert content["parsed_result"]["name"] == "10K 0603"
+    assert content["parsed_result"]["name"] == "0603 10K"
 
 
 def test_recognize_image_accepts_known_image_extension_without_content_type(
@@ -465,9 +485,11 @@ def test_recognition_session_background_stores_verified_result(
                                 "content": (
                                     '{"is_empty": false, '
                                     '"position_identifier": "单图", '
-                                    '"name": "223B 触摸开关模块", '
+                                    '"component_type": "MODULE", '
+                                    '"name_parts": {"model": "223B", "suffix": "触摸开关模块", "function": "触摸开关模块"}, '
+                                    '"name": "223B触摸开关模块", '
                                     '"tags": ["模块"], '
-                                    '"attributes": {"功能": "触摸开关模块"}}'
+                                    '"attributes": {"型号": "223B", "功能": "触摸开关模块"}}'
                                 )
                             }
                         }
@@ -483,9 +505,11 @@ def test_recognition_session_background_stores_verified_result(
                             "content": (
                                 '{"items": [{"position_identifier": "单图", '
                                 '"is_empty": false, '
-                                '"name": "223B 触摸开关模块", '
+                                '"component_type": "MODULE", '
+                                '"name_parts": {"model": "223B", "suffix": "触摸开关模块", "function": "触摸开关模块"}, '
+                                '"name": "223B触摸开关模块", '
                                 '"tags": ["模块"], '
-                                '"attributes": {"功能": "触摸开关模块"}, '
+                                '"attributes": {"型号": "223B", "功能": "触摸开关模块"}, '
                                 '"display_attribute": "功能"}]}'
                             )
                         }
@@ -533,7 +557,7 @@ def test_recognition_session_background_stores_verified_result(
 
     assert recognition_session.status == "succeeded"
     assert recognition_session.verification_status == "succeeded"
-    assert recognition_session.result["parsed_result"]["name"] == "触摸开关模块"
+    assert recognition_session.result["parsed_result"]["name"] == "223B触摸开关模块"
     assert recognition_session.verification_result["web_used"] is True
 
 
@@ -570,7 +594,7 @@ def test_confirm_box_recognition_creates_inventory(
                 {
                     "position_identifier": "R1C1",
                     "is_empty": False,
-                    "name": "10K 0603 1%",
+                    "name": "0603 10K 1%",
                     "tags": ["电阻", "贴片"],
                     "attributes": {"阻值": "10K", "封装": "0603"},
                     "display_attribute": "阻值",
@@ -590,7 +614,7 @@ def test_confirm_box_recognition_creates_inventory(
     search_response = client.get(f"{settings.API_V1_STR}/search/?q=10K")
     assert search_response.status_code == 200
     results = search_response.json()
-    assert results[0]["name"] == "10K 0603 1%"
+    assert results[0]["name"] == "0603 10K 1%"
     assert results[0]["locations"][0]["box_readable_id"] == "BOX-RECOG-01"
 
     components_response = client.get(f"{settings.API_V1_STR}/components/")
@@ -598,7 +622,7 @@ def test_confirm_box_recognition_creates_inventory(
     component = next(
         item
         for item in components_response.json()
-        if item["name"] == "10K 0603 1%"
+        if item["name"] == "0603 10K 1%"
     )
     assert component["display_attribute"] == "阻值"
 
