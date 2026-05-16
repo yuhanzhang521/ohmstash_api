@@ -783,10 +783,12 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
     def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
         prompt = kwargs["messages"][0]["content"][0]["text"]
         image_url = kwargs["messages"][0]["content"][1]["image_url"]["url"]
-        assert "规则网格" in prompt
+        assert "count physical compartments only" in prompt
         assert "rows * cols" in prompt
-        assert "不要根据整盒外轮廓长宽比" in prompt
-        assert "3x13" not in prompt
+        assert "four inner borders" in prompt
+        assert "本地图像分析提示" in prompt
+        assert "rows=13, cols=3" in prompt
+        assert "horizontal_lines=14, vertical_lines=4" in prompt
         assert "3 列 13 行" not in prompt
         assert image_url.startswith("data:image/jpeg;base64,")
         assert kwargs["max_tokens"] == ai_endpoint.BOX_LAYOUT_RECOGNITION_MAX_TOKENS

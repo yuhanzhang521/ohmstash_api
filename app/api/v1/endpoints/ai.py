@@ -27,6 +27,7 @@ from app.models.search_provider_config import (
 from app.models.vlm_provider_config import VlmProviderConfig as VlmProviderConfigModel
 from app.services import auth
 from app.services import (
+    grid_layout_estimator,
     recognition_prompt,
     recognition_text_cleanup,
     vlm_client,
@@ -1468,10 +1469,15 @@ def recognize_box_layout_image(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     config = vlm_config_service.get_config_for_use(db=db, config_id=config_id)
+    layout_hint = ""
+    if layout_type == "grid":
+        layout_hint = grid_layout_estimator.build_grid_layout_hint(
+            grid_layout_estimator.estimate_grid_layout(normalized_content),
+        )
     prompt = recognition_prompt.build_box_template_recognition_prompt(
         db,
         layout_type=layout_type,
-        additional_prompt=additional_prompt,
+        additional_prompt=f"{additional_prompt}{layout_hint}",
     )
     return _recognize_image_with_config(
         config=config,

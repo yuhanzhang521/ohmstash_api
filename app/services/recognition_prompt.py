@@ -75,12 +75,17 @@ SEARCH_RECOMMENDATION_RULE_TEXT = (
 
 
 GRID_COUNT_RULE_TEXT = (
-    "规则网格必须按可见分隔线、格子边界和重复格子数量来数 rows 与 cols，"
-    "不要根据整盒外轮廓长宽比、格子形状比例或已有模板猜测行列数。"
-    "rows 表示从上到下可见的格子排数，cols 表示从左到右可见的格子列数；"
-    "必须逐行、逐列计数，并让 layout_definition 的 rows * cols 与返回的 cells 数量一致。"
-    "如果图中某些格子为空，也必须计入布局；空格只影响 cell.is_empty，不影响 rows 或 cols。"
-    "不要为了让结果更常见、更整齐或更接近经验值而合并、截断、省略任何可见行列。"
+    "For a regular grid, count physical compartments only. Ignore parts, labels, text, color, and content visibility. "
+    "rows is the number of compartment bands between the inner top border and the inner bottom border. "
+    "cols is the number of compartment bands between the inner left border and the inner right border. "
+    "Use this procedure: find the four inner borders; count compartment cavities top-to-bottom and bottom-to-top; "
+    "count compartment cavities left-to-right and right-to-left; reconcile to the count that covers every cavity inside the borders. "
+    "Do not count divider lines as compartments: N internal divider lines usually create N+1 compartment bands. "
+    "Include outermost top, bottom, left, and right compartment bands even if they are empty, reflective, partially occluded, faint, or only partly visible. "
+    "If two adjacent counts are plausible, choose the larger count when the extra band is still inside the inner box borders. "
+    "Undercounting rows or cols is a critical error because real compartments lose position_identifier values. "
+    "Return cells for the complete skeleton from R1C1 to R{rows}C{cols}. "
+    "Before returning, verify layout_definition.rows * layout_definition.cols equals len(cells)."
 )
 
 GRID_CELL_COVERAGE_RULE_TEXT = (
@@ -90,11 +95,7 @@ GRID_CELL_COVERAGE_RULE_TEXT = (
 )
 
 
-def build_component_recognition_prompt(
-    db: Session,
-    *,
-    additional_prompt: str = "",
-) -> str:
+def _build_tag_catalog(db: Session) -> str:
     tags = (
         db.query(Tag)
         .options(joinedload(Tag.attribute_definitions))
@@ -108,7 +109,15 @@ def build_component_recognition_prompt(
         attribute_text = ", ".join(attributes) if attributes else "无固定属性"
         tag_lines.append(f"- {tag.name}: {attribute_text}")
 
-    tag_catalog = "\n".join(tag_lines) if tag_lines else "当前数据库还没有定义 Tag。"
+    return "\n".join(tag_lines) if tag_lines else "当前数据库还没有定义 Tag。"
+
+
+def build_component_recognition_prompt(
+    db: Session,
+    *,
+    additional_prompt: str = "",
+) -> str:
+    tag_catalog = _build_tag_catalog(db)
     extra_instruction = f"\n补充要求：{additional_prompt}" if additional_prompt else ""
     return (
         "你是一个电子元器件视觉识别助手。请识别图片里的主体元器件或工具。\n"
@@ -245,10 +254,7 @@ def build_box_template_recognition_prompt(
     layout_type: str,
     additional_prompt: str = "",
 ) -> str:
-    base_prompt = build_component_recognition_prompt(
-        db,
-        additional_prompt=additional_prompt,
-    )
+    extra_instruction = f"\n补充要求：{additional_prompt}" if additional_prompt else ""
     grid_instruction = (
         "用户预期这是规则网格。请识别行数 rows、列数 cols，"
         "并使用 R1C1 这种 position_identifier 返回每个格子的结果。"
@@ -284,36 +290,34 @@ def build_box_template_recognition_prompt(
         grid_instruction if layout_type == "grid" else irregular_instruction
     )
     return (
-        f"{base_prompt}\n\n"
-        "这是一张收纳盒或元器件盒的完整照片。请先识别盒子的模板布局，"
-        "再尽量识别每个格子里的元器件。\n"
+        "你是一个收纳盒模板布局识别助手。当前任务只要求识别盒子模板布局，"
+        "不要识别每个格子的元器件型号、名称、标签或参数。\n"
+        "第一优先级是布局：完整数出 rows、cols 和所有 position_identifier。\n"
         f"布局偏好：{layout_type}\n"
         f"{layout_instruction}\n"
-        "template_name 只能按盒子结构特征命名，不能包含识别到的盒内物品类别。"
-        "规则网格命名按“列x行格”，例如 4 列 7 行写作 4x7格。"
-        "不规则网格命名按“不规则N格”，例如 14 个小格写作“不规则14格”。"
-        f"box_name 才根据盒内主要元器件命名。{BOX_NAME_RULE_TEXT}\n"
-        f"再次强调：{NOTES_RULE_TEXT}\n"
+        "grid 模式下，cells 必须是完整布局骨架：从 R1C1 到 R{rows}C{cols} 连续列出所有位置，"
+        "每一行都必须包含 C1 到 C{cols}，每一列都必须包含 R1 到 R{rows}。"
+        "所有 cells 项都只需要 position_identifier 和 is_empty；"
+        "is_empty 可以统一返回 true，不能因为内容看不清而省略位置。\n"
+        "template_name 只能按盒子结构特征命名。"
+        "规则网格命名按“列x行格”，即 cols 在前、rows 在后；例如 rows=13 且 cols=3 时写作 3x13格。"
+        "不规则网格命名按“不规则N格”。"
+        "box_name 返回空字符串。"
+        "layout_definition.rows 和 layout_definition.cols 必须返回 JSON number，不要返回字符串。"
+        "layout_check 必须说明 rows 和 cols 的物理计数依据，且必须与 layout_definition 一致。\n"
         "请只返回一个 JSON 对象，不要返回 Markdown，不要额外解释。格式必须是：\n"
         "{\n"
-        '  "template_name": "4x7格",\n'
+        '  "template_name": "3x13格",\n'
         '  "layout_type": "grid",\n'
-        '  "layout_definition": {"rows": 7, "cols": 4},\n'
-        '  "box_name": "简短盒名",\n'
+        '  "layout_definition": {"rows": 13, "cols": 3},\n'
+        '  "layout_check": {"row_count_basis": "计数依据", "col_count_basis": "计数依据"},\n'
+        '  "box_name": "",\n'
         '  "cells": [\n'
         "    {\n"
         '      "position_identifier": "R1C1",\n'
-        '      "is_empty": false,\n'
-        '      "component_type": "IC",\n'
-        '      "name_parts": {"model": "MODEL"},\n'
-        '      "name": "MODEL",\n'
-        '      "tags": ["TAG_NAME"],\n'
-        '      "attributes": {"型号": "MODEL", "封装": "PACKAGE"},\n'
-        '      "display_attribute": "型号",\n'
-        '      "search_recommended": true,\n'
-        '      "confidence": 0.82,\n'
-        '      "notes": "可选说明"\n'
+        '      "is_empty": true\n'
         "    }\n"
         "  ]\n"
         "}\n"
+        f"{extra_instruction}"
     )
