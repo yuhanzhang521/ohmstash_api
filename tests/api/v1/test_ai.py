@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,6 +12,16 @@ from app.core.config import settings
 from app.models.auth_user import AuthUser
 from app.services import recognition_prompt, vlm_client, web_search
 from app.services.component_naming import normalize_component_names_in_parsed_result
+
+TEST_DATA_DIR = Path(__file__).resolve().parents[2]
+
+
+def _grid_cells(rows: int, cols: int) -> list[dict[str, Any]]:
+    return [
+        {"position_identifier": f"R{row}C{col}", "is_empty": True}
+        for row in range(1, rows + 1)
+        for col in range(1, cols + 1)
+    ]
 
 
 def _admin_user_id(db: Session) -> int:
@@ -765,23 +777,32 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
+    cells = _grid_cells(rows=13, cols=3)
+
     def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
         prompt = kwargs["messages"][0]["content"][0]["text"]
+        image_url = kwargs["messages"][0]["content"][1]["image_url"]["url"]
         assert "规则网格" in prompt
-        assert "3 列 13 行" in prompt
         assert "rows * cols" in prompt
+        assert "不要根据整盒外轮廓长宽比" in prompt
+        assert "3x13" not in prompt
+        assert "3 列 13 行" not in prompt
+        assert image_url.startswith("data:image/jpeg;base64,")
         assert kwargs["max_tokens"] == ai_endpoint.BOX_LAYOUT_RECOGNITION_MAX_TOKENS
         return (
             {
                 "choices": [
                     {
                         "message": {
-                            "content": (
-                                '{"template_name": "3x13格", '
-                                '"layout_type": "grid", '
-                                '"layout_definition": {"rows": 13, "cols": 3}, '
-                                '"cells": [{"position_identifier": "R1C1", '
-                                '"is_empty": true}]}'
+                            "content": json.dumps(
+                                {
+                                    "template_name": "3x13格",
+                                    "layout_type": "grid",
+                                    "layout_definition": {"rows": 13, "cols": 3},
+                                    "cells": cells,
+                                },
+                                ensure_ascii=False,
                             )
                         }
                     }
@@ -806,15 +827,19 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
     )
     assert config_response.status_code == 200
 
-    response = client.post(
-        f"{settings.API_V1_STR}/ai/recognize_box_layout_image",
-        files={"file": ("layout.jpg", b"fake-image", "image/jpeg")},
-        data={"layout_type": "grid"},
-    )
+    with image_path.open("rb") as image_file:
+        response = client.post(
+            f"{settings.API_V1_STR}/ai/recognize_box_layout_image",
+            files={"file": (image_path.name, image_file, "image/jpeg")},
+            data={"layout_type": "grid"},
+        )
+
     assert response.status_code == 200
     content = response.json()
-    assert content["parsed_result"]["layout_definition"]["rows"] == 13
-    assert content["parsed_result"]["layout_definition"]["cols"] == 3
+    layout_definition = content["parsed_result"]["layout_definition"]
+    assert layout_definition["rows"] == 13
+    assert layout_definition["cols"] == 3
+    assert len(content["parsed_result"]["cells"]) == 39
 
 
 def test_confirm_new_box_recognition_creates_box_and_inventory(
