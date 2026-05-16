@@ -12,7 +12,7 @@ from app.services.box_name_rules import BOX_NAME_MAX_DISPLAY_WIDTH
 BOX_NAME_RULE_TEXT = (
     f"盒子名称的显示宽度必须不超过 {BOX_NAME_MAX_DISPLAY_WIDTH}（汉字按 2 计、英数字符按 1 计），"
     f"即最多 7 个汉字、或 6 个汉字加 2 个英数字符、或 14 个英数字符。"
-    "不要包含“收纳盒”“盒子”“盒”等后缀；例如返回“电源芯片”而不是“电源芯片盒”。"
+    "不要包含“收纳盒”“盒子”“盒”等后缀；只返回能概括盒内主要物品类别的简短名称。"
 )
 
 NOTES_RULE_TEXT = (
@@ -31,42 +31,38 @@ COMPONENT_TYPE_RULE_TEXT = (
 )
 
 COMPONENT_NAME_RULE_TEXT = (
-    "name 必须能让人一眼看出器件是什么；除 IC 用纯型号外，name 中必须出现器件类别词或功能词"
-    "（如 电阻、电容、电感、芯片、模块、开发板、舵机、风扇、传感器、端子、线鼻子、喇叭、按键、显示屏、变压器 等）。"
-    "必须读取整张标签的所有文字行：标签上常常一行是参数（电压、电流、阻值、容值、量程、尺寸代号），"
-    "另一行是器件类别词或型号；不能默认只用第一行或最大字号那一行。"
-    "供电电压（如 12V、5V）、阻值、量程、规格代号本身不能作为器件名称的全部，"
-    "也不能填到 name_parts.model；它们只能进入 attributes，必要时作为 name 的辅助参数。"
+    "name 必须能让人一眼看出器件是什么；除 IC 用纯型号外，name 中必须出现器件类别词或功能词。"
+    "必须读取整张标签的所有文字行，不能默认只用第一行、最大字号行或最醒目的单个字段。"
+    "标签中可见的型号、类别词、数量、通道数、接口、隔离/耦合方式、输入输出、供电、量程、"
+    "封装、规格、版本等信息都必须尽量保留到 name_parts、attributes 或 notes 中。"
+    "供电电压、电流、阻值、量程、尺寸、封装、版本号等参数不能单独作为 name 的全部，"
+    "也不能误填到 name_parts.model；它们应进入 attributes，必要时作为 name 的辅助参数。"
     "\n"
-    "PASSIVE 命名规则：name_parts 必须含 value（阻值/容值/电感值）；贴片件还要含 package（如 0603），"
-    "插件件 package 留空。最终 name 使用“封装 + 数值”或纯数值，不要把精度、电压、温漂等次要参数塞进 name。"
-    "示例：name=\"0603 10K\"、name=\"10uF\"。"
+    "如果标签上存在多个并列型号、料号或兼容型号，必须全部保留，按标签原有顺序合并到 name_parts.model；"
+    "多个型号之间使用 / 分隔，不要只选择其中一个，也不要把并列型号误认为批号或备注。"
     "\n"
-    "IC 命名规则：name_parts.model 必须填完整丝印型号；name 直接等于该型号，"
-    "不要把封装、丝印位置、批号或功能描述当作 name。示例：name=\"STM32F103C8T6\"、name=\"BQ24195RGER\"。"
+    "功能修饰词不能丢弃：数量、路数/通道数、隔离方式、触发方式、接口类型、输入输出类型、"
+    "保护特性、调节方式、封装形态等都属于可识别信息。"
+    "这类信息应写入 attributes 的明确字段；如果它们是区分器件的关键信息，也应进入 name_parts.spec 或 name。"
     "\n"
-    "MODULE 命名规则：从所有标签文字中识别真正的型号（通常是字母加数字组合，如 ESP32S3、SG90、TTP223B、PAM8403、HLK-LD1020、5015），"
-    "供电电压、电流不是型号。name_parts 必须含 function（中文功能/类别词，如 开发板、舵机、模块、风扇、传感器、功放模块）。"
-    "若识别到型号则填 name_parts.model 和 name_parts.suffix（=function 对应的功能后缀），"
-    "最终 name=\"model + suffix\"，model 与 suffix 之间不加空格；"
-    "若没有可靠型号，model 留空，name 直接等于 function。"
-    "示例：标签“SG90舵机” → model=\"SG90\"、suffix=\"舵机\"、name=\"SG90舵机\"；"
-    "标签“12V 5015 离心风扇” → model=\"5015\"、suffix=\"离心风扇\"、name=\"5015离心风扇\"，attributes.供电电压=\"12V\"；"
-    "标签“PAM8403 5V 功放模块” → model=\"PAM8403\"、suffix=\"功放模块\"、name=\"PAM8403功放模块\"，attributes.供电电压=\"5V\"；"
-    "标签“继电器模块” → model 留空、function=\"继电器模块\"、name=\"继电器模块\"。"
+    "PASSIVE 命名规则：name_parts 必须含 value；贴片件还要含 package，插件件 package 留空。"
+    "最终 name 使用 package 与 value 组合，或只使用 value；精度、耐压、温漂等次要参数写入 attributes。"
     "\n"
-    "OTHER 命名规则：name_parts 必须含 function（器件类别词，如 水泥电阻、薄膜压力传感器、线鼻子、端子、喇叭、按键、网络变压器）；"
-    "如果标签还有规格/参数，另填 name_parts.spec，最终 name=\"function + 空格 + spec\"；"
-    "若有可识别型号字符串，填 name_parts.model，最终 name=\"function + 空格 + model\"。"
-    "name 中必须出现 function（类别词），绝不能只用纯参数当 name。"
-    "示例：标签“10W 5欧姆 水泥电阻” → function=\"水泥电阻\"、spec=\"10W 5Ω\"、name=\"水泥电阻 10W 5Ω\"，"
-    "attributes 写入 功率=\"10W\"、阻值=\"5Ω\"、类型=\"水泥电阻\"；"
-    "标签“5g-1kg 薄膜压力传感器” → function=\"薄膜压力传感器\"、spec=\"5g-1kg\"、name=\"薄膜压力传感器 5g-1kg\"，"
-    "attributes 写入 量程=\"5g-1kg\"；"
-    "标签“0.5-3 线鼻子” → function=\"线鼻子\"、spec=\"0.5-3\"、name=\"线鼻子 0.5-3\"，attributes 写入 规格=\"0.5-3\"。"
+    "IC 命名规则：name_parts.model 必须填完整丝印型号或标签型号；name 直接等于该型号。"
+    "不要把封装、丝印位置、批号、日期码或功能描述当作 model。"
+    "\n"
+    "MODULE 命名规则：从所有标签文字中识别真正的型号；供电电压、电流、接口数量等不是型号。"
+    "name_parts 必须含 function，表示中文功能/类别词。"
+    "若识别到型号则填 name_parts.model，并把 function 对应的功能后缀填入 name_parts.suffix；"
+    "最终 name 使用 model 与 suffix 组合。若没有可靠型号，model 留空，name 使用 function，"
+    "并把关键修饰词通过 name_parts.spec、attributes 或 notes 保留下来。"
+    "\n"
+    "OTHER 命名规则：name_parts 必须含 function，表示器件类别词。"
+    "如果标签还有规格、参数或关键修饰词，另填 name_parts.spec；若有可识别型号字符串，填 name_parts.model。"
+    "最终 name 必须包含 function，不能只用纯参数当 name。"
     "\n"
     "name 和 attributes 不互斥：name_parts 中的型号、功能名词和关键参数，attributes 中仍必须保留对应字段。"
-    "tags 必须忠实于实际器件形态，不要给水泥电阻或插件电阻打上“贴片”，不要给非贴片器件打上“贴片”。"
+    "tags 必须忠实于实际器件形态，不要给不符合形态的器件添加无关标签。"
 )
 
 SEARCH_RECOMMENDATION_RULE_TEXT = (
@@ -80,17 +76,17 @@ SEARCH_RECOMMENDATION_RULE_TEXT = (
 
 GRID_COUNT_RULE_TEXT = (
     "规则网格必须按可见分隔线、格子边界和重复格子数量来数 rows 与 cols，"
-    "不要根据整盒外轮廓长宽比猜测行列数。"
-    "格子可以很扁，整盒比例约 3:4 时仍可能是 3 列 13 行。"
-    "如果看到 3 列、13 排扁格，必须返回 layout_definition={\"rows\": 13, \"cols\": 3}，"
-    "template_name 写作 3x13格，并返回 R1C1 到 R13C3 的 39 个 cells。"
-    "不要因为上下边缘、远端行或透视导致部分格子不清楚，就把 13 行简化成 10 行。"
+    "不要根据整盒外轮廓长宽比、格子形状比例或已有模板猜测行列数。"
+    "rows 表示从上到下可见的格子排数，cols 表示从左到右可见的格子列数；"
+    "必须逐行、逐列计数，并让 layout_definition 的 rows * cols 与返回的 cells 数量一致。"
+    "如果图中某些格子为空，也必须计入布局；空格只影响 cell.is_empty，不影响 rows 或 cols。"
+    "不要为了让结果更常见、更整齐或更接近经验值而合并、截断、省略任何可见行列。"
 )
 
 GRID_CELL_COVERAGE_RULE_TEXT = (
     "规则网格内容识别必须覆盖模板中的所有格子：按 rows x cols 返回完整 cells，"
     "每个格子都要有对应 position_identifier；空格或看不清的格子也要返回，"
-    "并把 is_empty 设为 true。不要省略边缘行、远端行或空格。"
+    "并把 is_empty 设为 true。不要省略任何可见格子或模板中定义的格子。"
 )
 
 
@@ -120,8 +116,8 @@ def build_component_recognition_prompt(
         "如果能识别，请优先使用下面 Tag 库里的标签，并按标签定义抽取属性。\n\n"
         "display_attribute 必须是 attributes 中适合作为辅助缩略信息的属性名，不是主标题。"
         "主标题必须写在 name 中，并优先表达器件是什么；display_attribute 不能让 name 丢失器件类别。"
-        "阻容感优先选择阻值、容值或电感值，例如名称为 0603 75pF 50V 10% 时，"
-        "attributes 写入容值=75pF、封装=0603，display_attribute 写入容值。"
+        "阻容感优先选择阻值、容值或电感值，attributes 写入对应参数与封装，"
+        "display_attribute 写入最适合缩略展示的参数名。"
         "芯片可以选择型号；模块模组可以选择型号或功能；不要为了缩略显示改短 name。"
         "长型号允许在前端被省略号截断，不要为了缩略显示改短 name。\n\n"
         f"{COMPONENT_TYPE_RULE_TEXT}\n\n"
@@ -133,11 +129,11 @@ def build_component_recognition_prompt(
         "{\n"
         '  "is_empty": false,\n'
         '  "component_type": "PASSIVE",\n'
-        '  "name_parts": {"package": "0603", "value": "10K"},\n'
-        '  "name": "0603 10K 1%",\n'
-        '  "tags": ["贴片", "电阻"],\n'
-        '  "attributes": {"封装": "0603", "阻值": "10K", "精度": "1%"},\n'
-        '  "display_attribute": "阻值",\n'
+        '  "name_parts": {"package": "PACKAGE", "value": "VALUE"},\n'
+        '  "name": "PACKAGE VALUE",\n'
+        '  "tags": ["TAG_NAME"],\n'
+        '  "attributes": {"封装": "PACKAGE", "参数": "VALUE"},\n'
+        '  "display_attribute": "参数",\n'
         '  "search_recommended": false,\n'
         '  "confidence": 0.82,\n'
         '  "notes": "可选说明"\n'
@@ -184,11 +180,11 @@ def build_box_recognition_prompt(
         '      "position_identifier": "R1C1",\n'
         '      "is_empty": false,\n'
         '      "component_type": "PASSIVE",\n'
-        '      "name_parts": {"package": "0603", "value": "10K"},\n'
-        '      "name": "0603 10K 1%",\n'
-        '      "tags": ["贴片", "电阻"],\n'
-        '      "attributes": {"封装": "0603", "阻值": "10K"},\n'
-        '      "display_attribute": "阻值",\n'
+        '      "name_parts": {"package": "PACKAGE", "value": "VALUE"},\n'
+        '      "name": "PACKAGE VALUE",\n'
+        '      "tags": ["TAG_NAME"],\n'
+        '      "attributes": {"封装": "PACKAGE", "参数": "VALUE"},\n'
+        '      "display_attribute": "参数",\n'
         '      "search_recommended": false,\n'
         '      "confidence": 0.82,\n'
         '      "notes": "可选说明"\n'
@@ -223,16 +219,16 @@ def build_new_box_recognition_prompt(
         f"{GRID_CELL_COVERAGE_RULE_TEXT}\n"
         "请只返回一个 JSON 对象，格式必须是：\n"
         "{\n"
-        '  "box_name": "电源芯片",\n'
+        '  "box_name": "简短盒名",\n'
         '  "cells": [\n'
         "    {\n"
         '      "position_identifier": "R1C1",\n'
         '      "is_empty": false,\n'
         '      "component_type": "IC",\n'
-        '      "name_parts": {"model": "BQ24195RGER"},\n'
-        '      "name": "BQ24195RGER",\n'
-        '      "tags": ["IC", "IC/电源芯片"],\n'
-        '      "attributes": {"型号": "BQ24195RGER", "封装": "VQFN-24"},\n'
+        '      "name_parts": {"model": "MODEL"},\n'
+        '      "name": "MODEL",\n'
+        '      "tags": ["TAG_NAME"],\n'
+        '      "attributes": {"型号": "MODEL", "封装": "PACKAGE"},\n'
         '      "display_attribute": "型号",\n'
         '      "search_recommended": true,\n'
         '      "confidence": 0.82,\n'
@@ -303,16 +299,16 @@ def build_box_template_recognition_prompt(
         '  "template_name": "4x7格",\n'
         '  "layout_type": "grid",\n'
         '  "layout_definition": {"rows": 7, "cols": 4},\n'
-        '  "box_name": "电源芯片",\n'
+        '  "box_name": "简短盒名",\n'
         '  "cells": [\n'
         "    {\n"
         '      "position_identifier": "R1C1",\n'
         '      "is_empty": false,\n'
         '      "component_type": "IC",\n'
-        '      "name_parts": {"model": "BQ24195RGER"},\n'
-        '      "name": "BQ24195RGER",\n'
-        '      "tags": ["IC", "IC/电源芯片"],\n'
-        '      "attributes": {"型号": "BQ24195RGER", "封装": "VQFN-24"},\n'
+        '      "name_parts": {"model": "MODEL"},\n'
+        '      "name": "MODEL",\n'
+        '      "tags": ["TAG_NAME"],\n'
+        '      "attributes": {"型号": "MODEL", "封装": "PACKAGE"},\n'
         '      "display_attribute": "型号",\n'
         '      "search_recommended": true,\n'
         '      "confidence": 0.82,\n'

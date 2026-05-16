@@ -9,6 +9,10 @@
       "name_part": "model"
     },
     {
+      "attribute": "规格",
+      "name_part": "spec"
+    },
+    {
       "attribute": "功能",
       "name_part": "function",
       "fallback_name_part": "suffix",

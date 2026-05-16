@@ -86,11 +86,13 @@ def _fallback_name_from_parts(
         model = _clean_text(name_parts.get("model"))
         suffix = _clean_text(name_parts.get("suffix"))
         function = _clean_text(name_parts.get("function"))
-        if model and suffix:
-            return f"{model}{suffix}"
-        if model and function:
-            return f"{model}{function}"
-        return function or suffix
+        spec = _clean_text(name_parts.get("spec"))
+        descriptor = suffix or function
+        if model and descriptor:
+            return f"{model}{descriptor}"
+        if spec and function:
+            return f"{spec}{function}"
+        return function or suffix or spec or model
 
     function = _clean_text(name_parts.get("function"))
     spec = _clean_text(name_parts.get("spec"))
