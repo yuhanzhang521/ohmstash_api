@@ -22,7 +22,6 @@ def get_current_principal(
     request: Request,
     db: Session = Depends(get_db),
 ) -> auth.AuthPrincipal:
-    auth.ensure_default_admin(db)
     header = request.headers.get("Authorization", "")
     scheme, _, token = header.partition(" ")
     if scheme.lower() != "bearer" or not token:

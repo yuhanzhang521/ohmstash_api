@@ -259,15 +259,18 @@ def delete_box(
         ]
 
     db.delete(box)
-    db.flush()
-    if component_ids:
-        components = (
-            db.query(models.Component)
-            .filter(models.Component.id.in_(component_ids))
-            .all()
-        )
-        for component in components:
-            if not component.inventory:
-                db.delete(component)
     db.commit()
+    if component_ids:
+        orphan_ids = [
+            cid
+            for cid in component_ids
+            if not db.query(models.Inventory)
+            .filter(models.Inventory.component_id == cid)
+            .first()
+        ]
+        if orphan_ids:
+            db.query(models.Component).filter(
+                models.Component.id.in_(orphan_ids),
+            ).delete(synchronize_session="fetch")
+            db.commit()
     return deleted_box

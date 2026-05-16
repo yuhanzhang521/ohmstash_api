@@ -130,6 +130,8 @@ def _sync_configured_attributes(
         if not value and rule.get("fallback_name_part"):
             value = _clean_text(name_part_map.get(rule["fallback_name_part"]))
         _sync_attribute(attributes, str(rule.get("attribute") or ""), value)
+
+
 def _sync_attribute(
     attributes: Dict[str, Any],
     key: str,

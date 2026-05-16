@@ -69,7 +69,7 @@ def test_default_admin_consumes_reset_password(
     monkeypatch.setattr("app.services.auth.settings", runtime_settings)
     monkeypatch.setattr("app.core.service_config.ENV_FILE", env_file)
 
-    auth.ensure_default_admin(db)
+    auth.reset_default_admin_password(db, user)
     db.refresh(user)
 
     assert auth.verify_password(RESET_PASSWORD, user.password_hash)
@@ -126,4 +126,4 @@ def test_default_reset_password_rejected_in_production(
     monkeypatch.setattr("app.services.auth.settings", runtime_settings)
 
     with pytest.raises(ValueError, match="Default admin reset password"):
-        auth.ensure_default_admin(db)
+        auth.reset_default_admin_password(db, user)

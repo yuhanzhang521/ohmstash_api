@@ -27,6 +27,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     run_database_migrations(settings.DATABASE_URL, engine=engine)
     with SessionLocal() as db:
         auth.ensure_default_admin(db)
+        auth.reset_default_admin_password(db, db.query(auth.AuthUser).order_by(auth.AuthUser.id).first())
     if settings.CADDY_BACKEND_HOST == "api":
         try:
             write_caddy_config(settings)

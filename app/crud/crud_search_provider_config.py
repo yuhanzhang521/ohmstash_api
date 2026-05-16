@@ -70,7 +70,7 @@ class CRUDSearchProviderConfig(
         db.query(self.model).filter(
             self.model.id != config_id,
             self.model.is_default.is_(True),
-        ).update({"is_default": False}, synchronize_session=False)
+        ).update({"is_default": False}, synchronize_session="fetch")
         db.commit()
 
 

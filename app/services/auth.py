@@ -66,7 +66,6 @@ def hash_api_key(api_key: str) -> str:
 def ensure_default_admin(db: Session) -> AuthUser:
     user = db.query(AuthUser).order_by(AuthUser.id).first()
     if user:
-        reset_default_admin_password(db, user)
         return user
     initial_password = settings.ADMIN_INITIAL_PASSWORD
     if not initial_password:

@@ -73,9 +73,12 @@ def set_runtime_log_level(level: str) -> str:
     return log_level
 
 
+_LEVEL_NAME_REVERSE = {v: k for k, v in VALID_LOG_LEVELS.items()}
+
+
 def get_runtime_log_level() -> str:
     level = logging.getLogger().getEffectiveLevel()
-    return logging.getLevelName(level)
+    return _LEVEL_NAME_REVERSE.get(level, "INFO")
 
 
 def read_log_lines(limit: int) -> tuple[list[str], int]:

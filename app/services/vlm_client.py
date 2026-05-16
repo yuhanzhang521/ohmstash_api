@@ -51,7 +51,7 @@ def _is_private_hostname(hostname: str) -> bool:
 
     for address in addresses:
         ip_address = ipaddress.ip_address(address[4][0])
-        if not ip_address.is_global:
+        if ip_address.is_loopback or ip_address.is_link_local:
             return True
     return False
 
