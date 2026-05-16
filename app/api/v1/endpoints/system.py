@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app import models
@@ -139,7 +140,10 @@ def read_logs(
 
 
 @router.post("/decode_box_code", response_model=schemas.CodeDecodeResponse)
-def decode_box_code(file: UploadFile = File(...)) -> object:
+def decode_box_code(
+    file: UploadFile = File(...),
+    _principal: auth.AuthPrincipal = Depends(deps.get_current_user_principal),
+) -> object:
     try:
         content = read_limited_upload(file)
     except ValueError as exc:
@@ -158,6 +162,10 @@ def decode_box_code(file: UploadFile = File(...)) -> object:
     )
 
 
+def _current_database_name() -> str:
+    return make_url(settings.DATABASE_URL).database or ""
+
+
 @router.delete("/database", response_model=schemas.DatabaseClearResponse)
 def clear_database(
     clear_in: schemas.DatabaseClearRequest | None = None,
@@ -166,6 +174,8 @@ def clear_database(
 ) -> object:
     if clear_in is None:
         raise HTTPException(status_code=400, detail="Database clear confirmation is required")
+    if clear_in.database_name != _current_database_name():
+        raise HTTPException(status_code=400, detail="Database name confirmation does not match")
     deleted_boxes = db.query(models.Box).count()
     deleted_components = db.query(models.Component).count()
     deleted_tags = db.query(models.Tag).count()

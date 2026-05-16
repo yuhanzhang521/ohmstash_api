@@ -26,7 +26,7 @@ def login(
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return schemas.LoginResponse(
-        token=auth_service.create_session_token(user),
+        token=auth_service.create_session_token(db, user),
         username=user.username,
     )
 

@@ -27,18 +27,21 @@ def _ensure_safe_test_database(database_url: str) -> None:
 _ensure_safe_test_database(TEST_DATABASE_URL)
 settings.DATABASE_URL = TEST_DATABASE_URL
 
-from app.database import Base, ensure_schema_compatibility
+from app.core.migrations import reset_database_with_migrations
 from app.main import app
 
 engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+@pytest.fixture(scope="session")
+def test_database_url() -> str:
+    return TEST_DATABASE_URL
+
+
 @pytest.fixture(scope="session", autouse=True)
 def db_lifecycle() -> Generator[None, None, None]:
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    ensure_schema_compatibility()
+    reset_database_with_migrations(TEST_DATABASE_URL, engine=engine)
     yield
 
 
@@ -66,7 +69,7 @@ def client(db: Session) -> Generator[TestClient, None, None]:
         test_client = TestClient(app)
         response = test_client.post(
             f"{settings.API_V1_STR}/auth/login",
-            json={"username": "admin", "password": "password"},
+            json={"username": "admin", "password": settings.DEFAULT_ADMIN_PASSWORD},
         )
         assert response.status_code == 200
         test_client.headers.update(

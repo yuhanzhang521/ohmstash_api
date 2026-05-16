@@ -26,7 +26,13 @@ from app.models.search_provider_config import (
 )
 from app.models.vlm_provider_config import VlmProviderConfig as VlmProviderConfigModel
 from app.services import auth
-from app.services import recognition_prompt, recognition_text_cleanup, vlm_client, web_search
+from app.services import (
+    recognition_prompt,
+    recognition_text_cleanup,
+    vlm_client,
+    vlm_config_service,
+    web_search,
+)
 from app.services.component_naming import (
     normalize_component_names_in_parsed_result,
     normalize_recognized_cell_payload,
@@ -53,38 +59,6 @@ RECOGNITION_SESSION_MODES = {
 }
 
 
-def _ensure_unique_config_name(
-    db: Session,
-    *,
-    name: str,
-    current_config_id: Optional[int] = None,
-) -> None:
-    existing_config = crud.vlm_provider_config.get_by_name(db=db, name=name)
-    if existing_config and existing_config.id != current_config_id:
-        raise HTTPException(status_code=400, detail="VLM config name already exists")
-
-
-def _get_required_default_config(db: Session) -> VlmProviderConfigModel:
-    config = crud.vlm_provider_config.get_default(db=db)
-    if not config:
-        raise HTTPException(status_code=404, detail="Default VLM config not found")
-    return config
-
-
-def _get_vlm_config_for_use(
-    db: Session,
-    *,
-    config_id: Optional[int] = None,
-) -> VlmProviderConfigModel:
-    if config_id is None:
-        return _get_required_default_config(db=db)
-
-    config = crud.vlm_provider_config.get(db=db, id=config_id)
-    if not config:
-        raise HTTPException(status_code=404, detail="VLM config not found")
-    return config
-
-
 def _get_search_provider_config_for_use(
     db: Session,
     *,
@@ -109,44 +83,6 @@ def _build_search_provider_settings(
         provider=config.provider,
         api_key=config.api_key,
         extra_config=config.extra_config or {},
-    )
-
-
-def _build_transient_config(
-    config_in: schemas.VlmProviderConfigCreate,
-) -> VlmProviderConfigModel:
-    return VlmProviderConfigModel(**config_in.model_dump())
-
-
-def _run_vlm_test(
-    config: VlmProviderConfigModel,
-    *,
-    prompt: str,
-) -> schemas.VlmConnectionTestResult:
-    try:
-        response, latency_ms = vlm_client.request_chat_completion(
-            config=config,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=64,
-        )
-    except vlm_client.VlmClientError as exc:
-        return schemas.VlmConnectionTestResult(
-            ok=False,
-            provider=config.provider,
-            model_name=config.model_name,
-            status_code=exc.status_code,
-            message=exc.message,
-            response_text=exc.response_body,
-        )
-
-    response_text = vlm_client.extract_message_text(response)
-    return schemas.VlmConnectionTestResult(
-        ok=True,
-        provider=config.provider,
-        model_name=config.model_name,
-        latency_ms=latency_ms,
-        message="VLM config test succeeded",
-        response_text=response_text,
     )
 
 
@@ -736,7 +672,7 @@ def _verify_component_items(
     db: Session,
     verify_in: schemas.ComponentVerificationRequest,
 ) -> schemas.ComponentVerificationResponse:
-    config = _get_vlm_config_for_use(db=db, config_id=verify_in.config_id)
+    config = vlm_config_service.get_config_for_use(db=db, config_id=verify_in.config_id)
     logger.info(
         "Component verification started config_id=%s items=%s use_web=%s",
         config.id,
@@ -839,7 +775,7 @@ def _verify_component_items(
 
 @router.get("/vlm_config", response_model=schemas.VlmProviderConfig)
 def read_default_vlm_config(db: Session = Depends(deps.get_db)) -> object:
-    return _get_required_default_config(db=db)
+    return vlm_config_service.get_required_default_config(db=db)
 
 
 @router.put("/vlm_config", response_model=schemas.VlmProviderConfig)
@@ -848,29 +784,7 @@ def upsert_default_vlm_config(
     db: Session = Depends(deps.get_db),
     config_in: schemas.VlmProviderConfigCreate,
 ) -> object:
-    default_config = crud.vlm_provider_config.get_default(db=db)
-    if default_config:
-        _ensure_unique_config_name(
-            db=db,
-            name=config_in.name,
-            current_config_id=default_config.id,
-        )
-        config_data = config_in.model_dump()
-        if "api_key" not in config_in.model_fields_set:
-            config_data.pop("api_key", None)
-        config_data["is_default"] = True
-        update_data = schemas.VlmProviderConfigUpdate(**config_data)
-        return crud.vlm_provider_config.update(
-            db=db,
-            db_obj=default_config,
-            obj_in=update_data,
-        )
-
-    _ensure_unique_config_name(db=db, name=config_in.name)
-    config_data = config_in.model_dump()
-    config_data["is_default"] = True
-    create_data = schemas.VlmProviderConfigCreate(**config_data)
-    return crud.vlm_provider_config.create(db=db, obj_in=create_data)
+    return vlm_config_service.upsert_default_config(db=db, config_in=config_in)
 
 
 @router.post("/vlm_config/test", response_model=schemas.VlmConnectionTestResult)
@@ -881,11 +795,11 @@ def test_default_vlm_config(
 ) -> object:
     request_data = test_in or schemas.VlmConnectionTestRequest()
     config = (
-        _build_transient_config(request_data.config)
+        vlm_config_service.build_transient_config(request_data.config)
         if request_data.config
-        else _get_required_default_config(db=db)
+        else vlm_config_service.get_required_default_config(db=db)
     )
-    return _run_vlm_test(config=config, prompt=request_data.prompt)
+    return vlm_config_service.run_connection_test(config=config, prompt=request_data.prompt)
 
 
 @router.post("/vlm_configs/", response_model=schemas.VlmProviderConfig)
@@ -894,7 +808,7 @@ def create_vlm_config(
     db: Session = Depends(deps.get_db),
     config_in: schemas.VlmProviderConfigCreate,
 ) -> object:
-    _ensure_unique_config_name(db=db, name=config_in.name)
+    vlm_config_service.ensure_unique_config_name(db=db, name=config_in.name)
     return crud.vlm_provider_config.create(db=db, obj_in=config_in)
 
 
@@ -911,7 +825,7 @@ def read_vlm_configs(
 def read_default_vlm_config_from_collection(
     db: Session = Depends(deps.get_db),
 ) -> object:
-    return _get_required_default_config(db=db)
+    return vlm_config_service.get_required_default_config(db=db)
 
 
 @router.post(
@@ -925,8 +839,8 @@ def test_vlm_config(
     test_in: Optional[schemas.VlmConnectionTestRequest] = None,
 ) -> object:
     request_data = test_in or schemas.VlmConnectionTestRequest()
-    config = _get_vlm_config_for_use(db=db, config_id=config_id)
-    return _run_vlm_test(config=config, prompt=request_data.prompt)
+    config = vlm_config_service.get_config_for_use(db=db, config_id=config_id)
+    return vlm_config_service.run_connection_test(config=config, prompt=request_data.prompt)
 
 
 @router.get("/vlm_configs/{config_id}", response_model=schemas.VlmProviderConfig)
@@ -952,7 +866,7 @@ def update_vlm_config(
     if not config:
         raise HTTPException(status_code=404, detail="VLM config not found")
     if config_in.name:
-        _ensure_unique_config_name(
+        vlm_config_service.ensure_unique_config_name(
             db=db,
             name=config_in.name,
             current_config_id=config.id,
@@ -1126,7 +1040,7 @@ def _run_recognition_session_with_db(
     db.commit()
 
     try:
-        config = _get_vlm_config_for_use(
+        config = vlm_config_service.get_config_for_use(
             db=db,
             config_id=recognition_session.config_id,
         )
@@ -1321,7 +1235,7 @@ def create_recognition_session(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    config = _get_vlm_config_for_use(db=db, config_id=config_id)
+    config = vlm_config_service.get_config_for_use(db=db, config_id=config_id)
     search_provider_config = _get_search_provider_config_for_use(
         db=db,
         config_id=search_provider_config_id,
@@ -1445,7 +1359,7 @@ def recognize_image(
         normalized_content, content_type = normalize_upload_image(file, content)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    config = _get_vlm_config_for_use(db=db, config_id=config_id)
+    config = vlm_config_service.get_config_for_use(db=db, config_id=config_id)
     prompt = recognition_prompt.build_component_recognition_prompt(
         db,
         additional_prompt=additional_prompt,
@@ -1478,7 +1392,7 @@ def recognize_box_image(
         normalized_content, content_type = normalize_upload_image(file, content)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    config = _get_vlm_config_for_use(db=db, config_id=config_id)
+    config = vlm_config_service.get_config_for_use(db=db, config_id=config_id)
     prompt = recognition_prompt.build_box_recognition_prompt(
         db,
         box=box,
@@ -1515,7 +1429,7 @@ def recognize_box_template_image(
         normalized_content, content_type = normalize_upload_image(file, content)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    config = _get_vlm_config_for_use(db=db, config_id=config_id)
+    config = vlm_config_service.get_config_for_use(db=db, config_id=config_id)
     prompt = recognition_prompt.build_new_box_recognition_prompt(
         db,
         template=template,
@@ -1553,7 +1467,7 @@ def recognize_box_layout_image(
         normalized_content, content_type = normalize_upload_image(file, content)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    config = _get_vlm_config_for_use(db=db, config_id=config_id)
+    config = vlm_config_service.get_config_for_use(db=db, config_id=config_id)
     prompt = recognition_prompt.build_box_template_recognition_prompt(
         db,
         layout_type=layout_type,

@@ -10,8 +10,9 @@ from app import models
 from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.logging_config import configure_logging
+from app.core.migrations import run_database_migrations
 from app.core.service_config import write_caddy_config
-from app.database import Base, engine, ensure_schema_compatibility
+from app.database import engine
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _registered_models = models
@@ -22,8 +23,7 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    Base.metadata.create_all(bind=engine)
-    ensure_schema_compatibility()
+    run_database_migrations(settings.DATABASE_URL, engine=engine)
     if settings.CADDY_BACKEND_HOST == "api":
         try:
             write_caddy_config(settings)

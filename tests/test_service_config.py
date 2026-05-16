@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,8 @@ def test_save_server_config_writes_pasted_certificate_pair(
 
     assert certfile.read_text(encoding="utf-8").endswith("-----END CERTIFICATE-----\n")
     assert keyfile.read_text(encoding="utf-8").endswith("-----END PRIVATE KEY-----\n")
+    if os.name != "nt":
+        assert keyfile.stat().st_mode & 0o777 == 0o600
     content = env_file.read_text(encoding="utf-8")
     assert "HTTPS_CERTIFICATE_SOURCE=path" in content
     assert f"SSL_CERTFILE={certfile.as_posix()}" in content

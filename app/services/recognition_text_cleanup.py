@@ -1,80 +1,47 @@
+import json
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
-VERIFICATION_WARNING_PATTERNS = [
-    re.compile(r"未检索到[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"未找到[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"没有可确认[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"无法确认[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"搜索结果不足[^。；;，,\n]*(?:[。；;，,])?"),
-    re.compile(r"(?:暂)?保留原标注"),
-]
-MODEL_CORRECTION_PATTERN = re.compile(
-    r"搜索结果指向\s*(?P<target>[^：:。；;，,\n]+)"
-    r"(?:[：:]\s*(?P<summary>[^。；;\n]+))?"
-    r"[。；;，,\s]*(?P<warning>原始[^。；;\n]*(?:疑似|可能)[^。；;\n]*)"
-)
-MODEL_MULTI_CORRECTION_PATTERN = re.compile(
-    r"搜索结果(?:主要)?指向\s*(?P<targets>[^。；;\n]+?)"
-    r"(?:等(?:其他)?型号)?[，,\s]*(?P<warning>原始[^。；;\n]*(?:疑似|可能|误差|抄写|识别)[^。；;\n]*)"
-)
-MODEL_CORRECTION_TARGET_PATTERN = re.compile(
-    r"搜索结果(?:主要)?指向\s*(?P<target>[^：:。；;，,\n]+)"
-)
-MODEL_TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9._/-]*\d[A-Za-z0-9._/-]*")
-ATTRIBUTE_UNCERTAINTY_PATTERNS = [
-    re.compile(r"[（(][^（）()]{0,30}(?:未能|不能|无法|不足|不确定|待确认|不同厂商|版本不一致)[^（）()]{0,40}[）)]"),
-    re.compile(r"(?:未能|不能|无法|不足|不确定|待确认|不同厂商|版本不一致)[^。；;，,\n]*"),
-]
-PHOTO_META_KEYWORDS = (
-    "拍摄角度",
-    "拍照角度",
-    "拍摄方向",
-    "拍摄环境",
-    "拍摄面",
-    "在画面",
-    "在图中",
-    "标签可见",
-    "标签显示",
-    "标签含",
-    "标签朝向",
-    "标签朝",
-    "标签清晰",
-    "标签上",
-    "标签为",
-    "标签是",
-    "标签写",
-    "竖放",
-    "横放",
-    "竖立",
-    "侧立",
-    "倒置",
-    "正面朝",
-    "背面朝",
-    "镜头",
-    "照片",
-    "图片中",
-    "字体",
-    "字号",
-    "印刷字",
-    "丝印",
-    "丝网",
-    "光线",
-    "阴影",
-    "反光",
-    "倾斜放置",
-    "斜放",
-    "高亮",
-    "包装袋",
-    "包装上",
-    "袋装",
-    "纸标签",
-)
-PHOTO_META_SENTENCE_PATTERN = re.compile(
-    r"[^。；;\n]*(?:"
-    + "|".join(re.escape(keyword) for keyword in PHOTO_META_KEYWORDS)
-    + r")[^。；;\n]*[。；;]?"
-)
+CLEANUP_RULES_PATH = Path(__file__).with_name("recognition_text_cleanup_rules.json")
+
+
+@lru_cache(maxsize=1)
+def load_cleanup_rules() -> dict[str, Any]:
+    return json.loads(CLEANUP_RULES_PATH.read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=1)
+def get_compiled_rules() -> dict[str, Any]:
+    rules = load_cleanup_rules()
+    delimiters = rules["sentence_delimiters"]
+    warning_patterns = [
+        re.compile(rf"{re.escape(prefix)}[^{delimiters}\n]*(?:[{delimiters}])?")
+        for prefix in rules["verification_warning_prefixes"]
+    ]
+    warning_patterns.extend(
+        re.compile(pattern) for pattern in rules["verification_warning_phrases"]
+    )
+    photo_meta_sentence_pattern = re.compile(
+        rf"[^。；;\n]*(?:"
+        + "|".join(re.escape(keyword) for keyword in rules["photo_meta_keywords"])
+        + rf")[^。；;\n]*[。；;]?"
+    )
+    return {
+        "verification_warning_patterns": warning_patterns,
+        "model_correction_pattern": re.compile(rules["model_correction_pattern"]),
+        "model_multi_correction_pattern": re.compile(rules["model_multi_correction_pattern"]),
+        "model_correction_target_pattern": re.compile(rules["model_correction_target_pattern"]),
+        "model_token_pattern": re.compile(rules["model_token_pattern"]),
+        "attribute_uncertainty_patterns": [
+            re.compile(pattern) for pattern in rules["attribute_uncertainty_patterns"]
+        ],
+        "photo_meta_sentence_pattern": photo_meta_sentence_pattern,
+    }
+
+
+ATTRIBUTE_UNCERTAINTY_PATTERNS = get_compiled_rules()["attribute_uncertainty_patterns"]
 
 
 def extract_verification_warning(value: Any) -> Optional[str]:
@@ -88,12 +55,13 @@ def extract_verification_warning(value: Any) -> Optional[str]:
     if multi_correction_warning:
         return multi_correction_warning
     warnings: list[str] = []
-    for pattern in VERIFICATION_WARNING_PATTERNS:
+    for pattern in get_compiled_rules()["verification_warning_patterns"]:
         warnings.extend(match.group(0) for match in pattern.finditer(text))
     if not warnings:
         return None
-    warning = " ".join(warnings).strip("。；;，, \n\t")
-    return warning or "联网搜索未取得可确认资料，已保留原标注"
+    rules = load_cleanup_rules()
+    warning = " ".join(warnings).strip(rules["trim_characters"])
+    return warning or rules["fallback_warning"]
 
 
 def clean_verification_notes(value: Any) -> Optional[str]:
@@ -104,12 +72,13 @@ def clean_verification_notes(value: Any) -> Optional[str]:
     if correction_note:
         return strip_photo_meta_phrases(correction_note) or None
     text = remove_multi_correction_warning(text)
-    for pattern in VERIFICATION_WARNING_PATTERNS:
+    compiled_rules = get_compiled_rules()
+    for pattern in compiled_rules["verification_warning_patterns"]:
         text = pattern.sub("", text)
-    text = re.sub(r"(?:联网)?搜索摘要确认[:：]?\s*", "", text)
-    text = re.sub(r"联网确认[:：]?\s*", "", text)
+    for pattern in load_cleanup_rules()["verification_note_prefix_patterns"]:
+        text = re.sub(pattern, "", text)
     text = strip_photo_meta_phrases(text)
-    text = text.strip("。；;，, \n\t")
+    text = text.strip(load_cleanup_rules()["trim_characters"])
     return text or None
 
 
@@ -117,17 +86,18 @@ def strip_photo_meta_phrases(value: Any) -> str:
     text = str(value or "")
     if not text:
         return ""
-    cleaned = PHOTO_META_SENTENCE_PATTERN.sub("", text)
+    cleaned = get_compiled_rules()["photo_meta_sentence_pattern"].sub("", text)
     cleaned = re.sub(r"[\s。；;，,]+", lambda match: match.group(0)[0], cleaned)
-    return cleaned.strip("。；;，, \n\t")
+    return cleaned.strip(load_cleanup_rules()["trim_characters"])
 
 
 def split_model_correction_note(value: Any) -> tuple[Optional[str], Optional[str]]:
+    rules = load_cleanup_rules()
     text = normalize_search_value(value)
-    if not text or "搜索结果指向" not in text:
+    if not text or rules["model_correction_target_prefix"] not in text:
         return None, None
 
-    match = MODEL_CORRECTION_PATTERN.search(text)
+    match = get_compiled_rules()["model_correction_pattern"].search(text)
     if not match:
         return None, None
 
@@ -135,24 +105,33 @@ def split_model_correction_note(value: Any) -> tuple[Optional[str], Optional[str
     summary = normalize_search_value(match.group("summary"))
     warning_tail = normalize_search_value(match.group("warning"))
     note = f"{target}：{summary}" if target and summary else None
-    warning = f"搜索结果指向 {target}，{warning_tail}" if target else warning_tail
+    warning = (
+        f"{rules['model_correction_target_prefix']} {target}，{warning_tail}"
+        if target
+        else warning_tail
+    )
     return note, warning
 
 
 def extract_multi_correction_warning(value: Any) -> Optional[str]:
+    rules = load_cleanup_rules()
     text = normalize_search_value(value)
-    if not text or "搜索结果" not in text:
+    if not text or rules["model_correction_trigger"] not in text:
         return None
-    match = MODEL_MULTI_CORRECTION_PATTERN.search(text)
+    match = get_compiled_rules()["model_multi_correction_pattern"].search(text)
     if not match:
         return None
     target_text = normalize_search_value(match.group("targets")).rstrip("，, ")
     warning_tail = normalize_search_value(match.group("warning"))
-    return f"搜索结果主要指向 {target_text}，{warning_tail}" if target_text else warning_tail
+    return (
+        f"{rules['model_correction_main_prefix']} {target_text}，{warning_tail}"
+        if target_text
+        else warning_tail
+    )
 
 
 def remove_multi_correction_warning(value: str) -> str:
-    return MODEL_MULTI_CORRECTION_PATTERN.sub("", value)
+    return get_compiled_rules()["model_multi_correction_pattern"].sub("", value)
 
 
 def extract_corrected_component_name(
@@ -160,25 +139,27 @@ def extract_corrected_component_name(
     *,
     original_name: Optional[str] = None,
 ) -> Optional[str]:
+    rules = load_cleanup_rules()
     text = str(value or "")
-    multi_match = MODEL_MULTI_CORRECTION_PATTERN.search(text)
+    compiled_rules = get_compiled_rules()
+    multi_match = compiled_rules["model_multi_correction_pattern"].search(text)
     if multi_match:
-        tokens = MODEL_TOKEN_PATTERN.findall(multi_match.group("targets"))
+        tokens = compiled_rules["model_token_pattern"].findall(multi_match.group("targets"))
         if tokens:
             return choose_corrected_token(tokens, original_name=original_name)
 
-    match = MODEL_CORRECTION_TARGET_PATTERN.search(text)
+    match = compiled_rules["model_correction_target_pattern"].search(text)
     if match:
         target = normalize_search_value(match.group("target"))
-        tokens = MODEL_TOKEN_PATTERN.findall(target)
+        tokens = compiled_rules["model_token_pattern"].findall(target)
         if tokens:
             return choose_corrected_token(tokens, original_name=original_name)
         return target or None
 
-    if "搜索结果" not in text:
+    if rules["model_correction_trigger"] not in text:
         return None
 
-    tokens = MODEL_TOKEN_PATTERN.findall(text)
+    tokens = compiled_rules["model_token_pattern"].findall(text)
     if tokens:
         return choose_corrected_token(tokens, original_name=original_name)
     return None

@@ -1,5 +1,7 @@
+import ipaddress
 import json
 import logging
+import socket
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from threading import Lock
@@ -8,6 +10,8 @@ from typing import Any, List, Optional
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import httpx
+
+from app.core.log_sanitizer import redact_sensitive_data
 
 DEFAULT_DUCKDUCKGO_LITE_URL = "https://lite.duckduckgo.com/lite/?q={query}"
 DEFAULT_DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/?q={query}"
@@ -44,6 +48,34 @@ class SearchProviderError(Exception):
         super().__init__(message)
         self.errors = errors or [message]
         self.status_code = status_code
+
+
+def validate_search_url(url: str) -> None:
+    parsed_url = urlparse(url)
+    if parsed_url.scheme != "https":
+        raise SearchProviderError("Search provider URL must use https")
+    if not parsed_url.hostname:
+        raise SearchProviderError("Search provider URL must include a hostname")
+    if _is_private_hostname(parsed_url.hostname):
+        raise SearchProviderError("Search provider URL cannot target private network hosts")
+
+
+def _is_private_hostname(hostname: str) -> bool:
+    try:
+        addresses = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise SearchProviderError("Search provider URL hostname cannot be resolved") from exc
+
+    for address in addresses:
+        ip_address = ipaddress.ip_address(address[4][0])
+        if not ip_address.is_global:
+            return True
+    return False
+
+
+def _validated_search_url(url: str) -> str:
+    validate_search_url(url)
+    return url
 
 
 @dataclass
@@ -159,7 +191,7 @@ def _fetch_duckduckgo_snippets(
         for template in templates:
             if not template:
                 continue
-            url = template.format(query=quote_plus(query))
+            url = _validated_search_url(template.format(query=quote_plus(query)))
             response: Optional[httpx.Response] = None
             for attempt in range(1, 3):
                 _wait_for_rate_limit()
@@ -241,7 +273,7 @@ def _fetch_brave_search_snippets(
 ) -> List[dict[str, str]]:
     if not provider_settings.api_key:
         raise SearchProviderError("Brave Search API key is required")
-    url = provider_settings.extra_config.get("base_url") or DEFAULT_BRAVE_SEARCH_URL
+    url = _validated_search_url(provider_settings.extra_config.get("base_url") or DEFAULT_BRAVE_SEARCH_URL)
     params = {
         "q": query,
         "count": min(max(limit, 1), 20),
@@ -286,7 +318,7 @@ def _fetch_tavily_search_snippets(
 ) -> List[dict[str, str]]:
     if not provider_settings.api_key:
         raise SearchProviderError("Tavily API key is required")
-    url = provider_settings.extra_config.get("base_url") or DEFAULT_TAVILY_SEARCH_URL
+    url = _validated_search_url(provider_settings.extra_config.get("base_url") or DEFAULT_TAVILY_SEARCH_URL)
     payload = {
         "query": query,
         "max_results": min(max(limit, 1), 20),
@@ -326,7 +358,9 @@ def _fetch_openai_web_search_snippets(
 ) -> List[dict[str, str]]:
     if not provider_settings.api_key:
         raise SearchProviderError("OpenAI API key is required")
-    base_url = provider_settings.extra_config.get("base_url") or DEFAULT_OPENAI_BASE_URL
+    base_url = _validated_search_url(
+        provider_settings.extra_config.get("base_url") or DEFAULT_OPENAI_BASE_URL,
+    )
     model_name = (
         provider_settings.extra_config.get("model_name")
         or DEFAULT_OPENAI_WEB_SEARCH_MODEL
@@ -485,7 +519,7 @@ def _format_response_body(
         pass
     else:
         if isinstance(data, dict):
-            text = json.dumps(data, ensure_ascii=False)
+            text = json.dumps(redact_sensitive_data(data), ensure_ascii=False)
     return _normalize_text(text)[:max_length]
 
 

@@ -178,7 +178,7 @@ def test_request_json_surfaces_error_response_body(
         ) -> httpx.Response:
             return httpx.Response(
                 400,
-                json={"error": {"message": "Unsupported endpoint"}},
+                json={"error": {"message": "Unsupported endpoint", "api_key": "secret-key"}},
                 headers={"x-request-id": "req_123"},
                 request=httpx.Request(method, url),
             )
@@ -198,4 +198,22 @@ def test_request_json_surfaces_error_response_body(
     assert exc_info.value.status_code == 400
     assert "Unsupported endpoint" in str(exc_info.value)
     assert "request_id=req_123" in str(exc_info.value)
-    assert "Unsupported endpoint" in caplog.text
+    assert "secret-key" not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)
+
+
+def test_validate_search_url_rejects_private_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_getaddrinfo(*_args: Any, **_kwargs: Any) -> list[tuple[Any, ...]]:
+        return [(None, None, None, None, ("127.0.0.1", 443))]
+
+    monkeypatch.setattr(web_search.socket, "getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(web_search.SearchProviderError, match="private network"):
+        web_search.validate_search_url("https://metadata.local/search")
+
+
+def test_validate_search_url_rejects_plain_http() -> None:
+    with pytest.raises(web_search.SearchProviderError, match="must use https"):
+        web_search.validate_search_url("http://example.com/search")

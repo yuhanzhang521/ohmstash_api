@@ -1,10 +1,19 @@
 import copy
+import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 TYPE_PASSIVE = "PASSIVE"
 TYPE_IC = "IC"
 TYPE_MODULE = "MODULE"
 TYPE_OTHER = "OTHER"
+NAMING_RULES_PATH = Path(__file__).with_name("component_naming_rules.json")
+
+
+@lru_cache(maxsize=1)
+def load_naming_rules() -> Dict[str, Any]:
+    return json.loads(NAMING_RULES_PATH.read_text(encoding="utf-8"))
 
 
 def normalize_component_names_in_parsed_result(
@@ -45,13 +54,11 @@ def normalize_recognized_cell_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         if fallback_name:
             normalized["name"] = fallback_name
 
-    _sync_attribute(attribute_map, "封装", name_part_map.get("package"))
-    _sync_attribute(attribute_map, "型号", name_part_map.get("model"))
-    if component_type == TYPE_MODULE:
-        function_value = _clean_text(name_part_map.get("function")) or _clean_text(
-            name_part_map.get("suffix"),
-        )
-        _sync_attribute(attribute_map, "功能", function_value)
+    _sync_configured_attributes(
+        attribute_map,
+        component_type=component_type,
+        name_part_map=name_part_map,
+    )
 
     normalized["search_recommended"] = _decide_search_recommended(
         component_type=component_type,
@@ -110,6 +117,19 @@ def _decide_search_recommended(
     return bool(explicit_value)
 
 
+def _sync_configured_attributes(
+    attributes: Dict[str, Any],
+    *,
+    component_type: str,
+    name_part_map: Dict[str, Any],
+) -> None:
+    for rule in load_naming_rules().get("attribute_sync_rules", []):
+        if rule.get("component_type") and rule["component_type"] != component_type:
+            continue
+        value = _clean_text(name_part_map.get(rule.get("name_part")))
+        if not value and rule.get("fallback_name_part"):
+            value = _clean_text(name_part_map.get(rule["fallback_name_part"]))
+        _sync_attribute(attributes, str(rule.get("attribute") or ""), value)
 def _sync_attribute(
     attributes: Dict[str, Any],
     key: str,

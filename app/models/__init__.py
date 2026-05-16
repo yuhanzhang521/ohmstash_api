@@ -1,5 +1,6 @@
 from .attribute_definition import AttributeDefinition
 from .api_key import ApiKey
+from .auth_session import AuthSession
 from .auth_user import AuthUser
 from .box import Box
 from .box_template import BoxTemplate

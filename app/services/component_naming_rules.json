@@ -1,0 +1,18 @@
+{
+  "attribute_sync_rules": [
+    {
+      "attribute": "封装",
+      "name_part": "package"
+    },
+    {
+      "attribute": "型号",
+      "name_part": "model"
+    },
+    {
+      "attribute": "功能",
+      "name_part": "function",
+      "fallback_name_part": "suffix",
+      "component_type": "MODULE"
+    }
+  ]
+}

@@ -154,6 +154,7 @@ def _serialize_component_result(
 def test_search_provider_form(
     *,
     test_in: Optional[schemas.SearchProviderConnectionTestRequest] = None,
+    _principal: object = Depends(deps.get_current_user_principal),
 ) -> object:
     request_data = test_in or schemas.SearchProviderConnectionTestRequest()
     config = (
@@ -171,6 +172,7 @@ def create_search_provider_config(
     *,
     db: Session = Depends(deps.get_db),
     config_in: schemas.SearchProviderConfigCreate,
+    _principal: object = Depends(deps.get_current_user_principal),
 ) -> object:
     _validate_search_provider(config_in.provider)
     _ensure_unique_search_config_name(db=db, name=config_in.name)
@@ -182,6 +184,7 @@ def read_search_provider_configs(
     db: Session = Depends(deps.get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
+    _principal: object = Depends(deps.get_current_user_principal),
 ) -> object:
     return crud.search_provider_config.get_multi(db=db, skip=skip, limit=limit)
 
@@ -189,6 +192,7 @@ def read_search_provider_configs(
 @router.get("/providers/default", response_model=schemas.SearchProviderConfig)
 def read_default_search_provider_config(
     db: Session = Depends(deps.get_db),
+    _principal: object = Depends(deps.get_current_user_principal),
 ) -> object:
     config = crud.search_provider_config.get_default(db=db)
     if not config:
@@ -204,6 +208,7 @@ def read_search_provider_config(
     *,
     db: Session = Depends(deps.get_db),
     config_id: int,
+    _principal: object = Depends(deps.get_current_user_principal),
 ) -> object:
     config = crud.search_provider_config.get(db=db, id=config_id)
     if not config:
@@ -217,6 +222,7 @@ def update_search_provider_config(
     db: Session = Depends(deps.get_db),
     config_id: int,
     config_in: schemas.SearchProviderConfigUpdate,
+    _principal: object = Depends(deps.get_current_user_principal),
 ) -> object:
     config = crud.search_provider_config.get(db=db, id=config_id)
     if not config:
@@ -247,6 +253,7 @@ def set_default_search_provider_config(
     *,
     db: Session = Depends(deps.get_db),
     config_id: int,
+    _principal: object = Depends(deps.get_current_user_principal),
 ) -> object:
     config = crud.search_provider_config.get(db=db, id=config_id)
     if not config:
@@ -263,6 +270,7 @@ def test_search_provider_config(
     db: Session = Depends(deps.get_db),
     config_id: int,
     test_in: Optional[schemas.SearchProviderConnectionTestRequest] = None,
+    _principal: object = Depends(deps.get_current_user_principal),
 ) -> object:
     request_data = test_in or schemas.SearchProviderConnectionTestRequest()
     config = _get_search_provider_for_use(db=db, config_id=config_id)
@@ -274,6 +282,7 @@ def delete_search_provider_config(
     *,
     db: Session = Depends(deps.get_db),
     config_id: int,
+    _principal: object = Depends(deps.get_current_user_principal),
 ) -> object:
     config = crud.search_provider_config.get(db=db, id=config_id)
     if not config:

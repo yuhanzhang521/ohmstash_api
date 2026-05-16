@@ -1,5 +1,6 @@
 import os
 from logging.config import fileConfig
+from typing import Optional
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
@@ -9,7 +10,12 @@ from app.core.config import settings
 from app.database import Base
 
 config = context.config
-migration_database_url = os.environ.get("TEST_DATABASE_URL") or settings.DATABASE_URL
+configured_database_url: Optional[str] = config.get_main_option("sqlalchemy.url")
+migration_database_url = (
+    configured_database_url
+    or os.environ.get("TEST_DATABASE_URL")
+    or settings.DATABASE_URL
+)
 config.set_main_option("sqlalchemy.url", migration_database_url)
 
 if config.config_file_name is not None:

@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ServerConfig(BaseModel):
@@ -65,6 +65,12 @@ class LogLinesResponse(BaseModel):
 
 class DatabaseClearRequest(BaseModel):
     confirmation: str = Field(pattern="^CLEAR DATABASE$")
+    database_name: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_database_name(self) -> "DatabaseClearRequest":
+        self.database_name = self.database_name.strip()
+        return self
 
 
 class DatabaseClearResponse(BaseModel):

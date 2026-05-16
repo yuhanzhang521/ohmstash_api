@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.api_key import ApiKey
+from app.models.auth_session import AuthSession
 from app.models.auth_user import AuthUser
 
 PASSWORD_ITERATIONS = 260_000
@@ -16,7 +17,6 @@ SESSION_TOKEN_BYTES = 32
 API_KEY_BYTES = 32
 API_KEY_PREFIX = "ohm"
 SESSION_TOKEN_TTL_HOURS = 12
-session_tokens: dict[str, tuple[int, datetime]] = {}
 
 
 @dataclass
@@ -90,24 +90,45 @@ def authenticate_user(
     return user
 
 
-def create_session_token(user: AuthUser) -> str:
+def create_session_token(db: Session, user: AuthUser) -> str:
     token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TOKEN_TTL_HOURS)
-    session_tokens[token] = (int(user.id), expires_at)
+    session = AuthSession(
+        user_id=int(user.id),
+        token_hash=hash_session_token(token),
+        is_active=True,
+        expires_at=expires_at,
+    )
+    db.add(session)
+    db.commit()
     return token
 
 
+def hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def get_session_principal(db: Session, token: str) -> Optional[AuthPrincipal]:
-    session = session_tokens.get(token)
+    session = (
+        db.query(AuthSession)
+        .filter(
+            AuthSession.token_hash == hash_session_token(token),
+            AuthSession.is_active.is_(True),
+        )
+        .first()
+    )
     if not session:
         return None
-    user_id, expires_at = session
-    if expires_at <= datetime.now(timezone.utc):
-        session_tokens.pop(token, None)
+    if session.expires_at <= datetime.now(timezone.utc):
+        session.is_active = False
+        db.add(session)
+        db.commit()
         return None
-    user = db.query(AuthUser).filter(AuthUser.id == user_id).first()
+    user = db.query(AuthUser).filter(AuthUser.id == session.user_id).first()
     if not user or not user.is_active:
-        session_tokens.pop(token, None)
+        session.is_active = False
+        db.add(session)
+        db.commit()
         return None
     return AuthPrincipal(kind="user", id=user.id, name=user.username)
 

@@ -5,6 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine.url import URL
 
 
+EXPOSED_HOSTS = {"0.0.0.0", "::"}
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "OhmStash API"
     API_V1_STR: str = "/api/v1"
@@ -78,8 +82,20 @@ class Settings(BaseSettings):
         return self.HTTP_PORT if self.uses_caddy_acme else self.service_port
 
     @property
+    def is_externally_exposed(self) -> bool:
+        normalized_host = (self.SERVER_HOST or "").strip().lower()
+        if normalized_host in EXPOSED_HOSTS:
+            return True
+        return bool(normalized_host and normalized_host not in LOOPBACK_HOSTS)
+
+    @property
     def is_production_mode(self) -> bool:
-        return self.behind_reverse_proxy or bool(self.PUBLIC_BASE_URL or self.ACME_DOMAIN)
+        return (
+            self.behind_reverse_proxy
+            or self.is_externally_exposed
+            or self.HTTPS_ENABLED
+            or bool(self.PUBLIC_BASE_URL or self.ACME_DOMAIN)
+        )
 
     def validate_runtime_security(self) -> None:
         if not self.is_production_mode:

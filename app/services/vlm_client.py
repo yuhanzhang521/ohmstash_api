@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.core.log_sanitizer import redact_sensitive_text
 from app.models.vlm_provider_config import VlmProviderConfig
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -129,16 +130,17 @@ def request_chat_completion(
         latency_ms,
     )
     if response.status_code >= 400:
+        response_body = redact_sensitive_text(response.text)[:1000]
         logger.warning(
             "VLM request returned HTTP error provider=%s status=%s body=%s",
             config.provider,
             response.status_code,
-            response.text[:500],
+            response_body[:500],
         )
         raise VlmClientError(
             f"VLM request returned HTTP {response.status_code}",
             status_code=response.status_code,
-            response_body=response.text[:1000],
+            response_body=response_body,
         )
 
     try:

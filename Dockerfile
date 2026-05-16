@@ -31,6 +31,8 @@ RUN python -m pip install --no-index --find-links=/wheels -r requirements.txt \
     && rm -rf /wheels
 
 COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
 
 EXPOSE 8000
 

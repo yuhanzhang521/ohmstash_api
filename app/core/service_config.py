@@ -26,6 +26,7 @@ UPLOADED_KEY_FILE = CERT_DIR / "ohmstash-ui.key"
 CERTIFICATE_SOURCE_MODES = {"self-signed", "path", "upload", "paste", "acme"}
 ACME_CHALLENGE_TYPES = {"http-01", "dns-01"}
 ACME_HTTPS_PORT = 443
+PRIVATE_KEY_FILE_MODE = 0o600
 SERVER_CONFIG_KEYS = (
     "SERVER_HOST",
     "HTTP_PORT",
@@ -249,6 +250,13 @@ def build_caddy_reverse_proxy_lines(target_settings: Settings) -> list[str]:
     ]
 
 
+def restrict_private_key_file(path: Path) -> None:
+    try:
+        path.chmod(PRIVATE_KEY_FILE_MODE)
+    except OSError:
+        return
+
+
 def save_certificate_pair(cert_pem: str, key_pem: str) -> tuple[str, str]:
     if not cert_pem or not key_pem:
         raise ValueError("Certificate and private key content must be provided together")
@@ -260,6 +268,7 @@ def save_certificate_pair(cert_pem: str, key_pem: str) -> tuple[str, str]:
     CERT_DIR.mkdir(parents=True, exist_ok=True)
     UPLOADED_CERT_FILE.write_text(cert_pem.rstrip() + "\n", encoding="utf-8")
     UPLOADED_KEY_FILE.write_text(key_pem.rstrip() + "\n", encoding="utf-8")
+    restrict_private_key_file(UPLOADED_KEY_FILE)
     return UPLOADED_CERT_FILE.as_posix(), UPLOADED_KEY_FILE.as_posix()
 
 
@@ -296,6 +305,7 @@ def ensure_self_signed_certificate(host: str) -> None:
             encryption_algorithm=serialization.NoEncryption(),
         )
     )
+    restrict_private_key_file(SELF_SIGNED_KEY_FILE)
 
 
 def build_subject_alt_names(host: str) -> list[x509.GeneralName]:

@@ -66,7 +66,10 @@ def run_app_js_expression(expression: str) -> Any:
             return element;
         }}
 
-        const code = fs.readFileSync("app/static/app.js", "utf8").replace(/\\nboot\\(\\);\\s*$/, "\\n");
+        const code = ["app/static/app-core.js", "app/static/app.js"]
+            .map((path) => fs.readFileSync(path, "utf8"))
+            .join("\\n")
+            .replace(/\\nboot\\(\\);\\s*$/, "\\n");
         const storage = new Map();
         const localStorage = {{
             getItem: (key) => storage.has(key) ? storage.get(key) : "",
@@ -683,11 +686,14 @@ def test_recognition_draft_restores_until_explicitly_cleared() -> None:
 
 
 def test_recognition_uses_sessions_instead_of_unload_warning() -> None:
-    response = client.get("/ui/app.js")
-    assert response.status_code == 200
-    assert "beforeunload" not in response.text
-    assert "warnBeforeUnloadDuringAi" not in response.text
-    assert "RECOGNITION_ACTIVE_SESSION_STORAGE_KEY" in response.text
+    app_response = client.get("/ui/app.js")
+    core_response = client.get("/ui/app-core.js")
+    assert app_response.status_code == 200
+    assert core_response.status_code == 200
+    combined_source = app_response.text + core_response.text
+    assert "beforeunload" not in combined_source
+    assert "warnBeforeUnloadDuringAi" not in combined_source
+    assert "RECOGNITION_ACTIVE_SESSION_STORAGE_KEY" in combined_source
 
 
 def test_recognition_history_filters_compact_session_list() -> None:

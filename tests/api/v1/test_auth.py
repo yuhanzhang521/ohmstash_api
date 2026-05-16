@@ -3,11 +3,13 @@ from typing import Generator
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.config import settings
 from app.main import app
+from app.models.auth_session import AuthSession
 
 
 def test_protected_endpoint_requires_auth(db: Session) -> None:
@@ -27,7 +29,7 @@ def test_protected_endpoint_requires_auth(db: Session) -> None:
 def test_default_admin_login_and_api_key_access(client: TestClient) -> None:
     login_response = client.post(
         f"{settings.API_V1_STR}/auth/login",
-        json={"username": "admin", "password": "password"},
+        json={"username": "admin", "password": settings.DEFAULT_ADMIN_PASSWORD},
     )
     assert login_response.status_code == 200
     assert login_response.json()["username"] == "admin"
@@ -43,6 +45,22 @@ def test_default_admin_login_and_api_key_access(client: TestClient) -> None:
     health_response = client.get(f"{settings.API_V1_STR}/system/health")
     assert health_response.status_code == 200
     assert health_response.json() == {"status": "ok"}
+
+
+def test_user_session_token_is_persisted(client: TestClient, db: Session) -> None:
+    login_response = client.post(
+        f"{settings.API_V1_STR}/auth/login",
+        json={"username": "admin", "password": settings.DEFAULT_ADMIN_PASSWORD},
+    )
+    assert login_response.status_code == 200
+    token = login_response.json()["token"]
+
+    assert db.query(AuthSession).count() >= 1
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    response = client.get(f"{settings.API_V1_STR}/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["username"] == "admin"
 
 
 def test_decode_box_code_endpoint_reads_data_matrix(client: TestClient) -> None:
@@ -113,7 +131,10 @@ def test_clear_database_preserves_provider_and_account_config(
     clear_response = client.request(
         "DELETE",
         f"{settings.API_V1_STR}/system/database",
-        json={"confirmation": "CLEAR DATABASE"},
+        json={
+            "confirmation": "CLEAR DATABASE",
+            "database_name": make_url(settings.DATABASE_URL).database,
+        },
     )
     assert clear_response.status_code == 200
     assert clear_response.json()["deleted_boxes"] >= 1
@@ -124,3 +145,33 @@ def test_clear_database_preserves_provider_and_account_config(
     assert client.get(f"{settings.API_V1_STR}/ai/vlm_configs/").json()
     assert client.get(f"{settings.API_V1_STR}/search/providers/").json()
     assert client.get(f"{settings.API_V1_STR}/auth/api_keys").json()
+
+
+def test_clear_database_rejects_wrong_database_name(client: TestClient) -> None:
+    response = client.request(
+        "DELETE",
+        f"{settings.API_V1_STR}/system/database",
+        json={
+            "confirmation": "CLEAR DATABASE",
+            "database_name": "wrong_database",
+        },
+    )
+
+    assert response.status_code == 400
+
+    key_response = client.post(
+        f"{settings.API_V1_STR}/auth/api_keys",
+        json={"name": f"Search Management {uuid4().hex[:8]}"},
+    )
+    assert key_response.status_code == 200
+
+    client.headers.update({"Authorization": f"Bearer {key_response.json()['api_key']}"})
+    response = client.post(
+        f"{settings.API_V1_STR}/search/providers/",
+        json={
+            "name": f"Blocked Search {uuid4().hex[:8]}",
+            "provider": "duckduckgo",
+        },
+    )
+
+    assert response.status_code == 403
