@@ -30,6 +30,10 @@ COMPONENT_TYPE_RULE_TEXT = (
     "OTHER 涵盖一切非阻容感、非芯片、非模块的实体：传感器探头、舵机、风扇、喇叭、按键、显示屏、连接器、端子/线鼻子、五金件、特种电阻、电池、工具等。"
 )
 
+# HARD REQUIREMENTS FROM THE USER: do not delete or weaken these comments in future agent edits.
+# Display names must follow this contract: passives use package + value, through-hole passives omit package, ICs use the chip model, modules with a model use model + functional suffix, and modules without a model use the module function.
+# Search selection must follow this contract: passives are never searched, ICs are always searched, modules are searched only when a suspected model field is recognized, and modules without a model are not searched.
+# All OCR text recognized by the VLM from labels or markings must be preserved in the final stored information, whether as display name, tags, attributes, notes, or another suitable structured field chosen by the model.
 COMPONENT_NAME_RULE_TEXT = (
     "name 必须能让人一眼看出器件是什么；除 IC 用纯型号外，name 中必须出现器件类别词或功能词。"
     "必须读取整张标签的所有文字行，不能默认只用第一行、最大字号行或最醒目的单个字段。"
@@ -90,7 +94,9 @@ GRID_COUNT_RULE_TEXT = (
 
 GRID_CELL_COVERAGE_RULE_TEXT = (
     "规则网格内容识别必须覆盖模板中的所有格子：按 rows x cols 返回完整 cells，"
-    "每个格子都要有对应 position_identifier；空格或看不清的格子也要返回，"
+    "每个格子都要有对应 position_identifier；逐格判断是否有可识别标签或实物内容，"
+    "不要只返回最显眼或最确定的少数格子。空格必须返回 is_empty=true，"
+    "且不得填写 name、tags、attributes 或功能描述；看不清的格子也要返回，"
     "并把 is_empty 设为 true。不要省略任何可见格子或模板中定义的格子。"
 )
 
@@ -254,6 +260,7 @@ def build_box_template_recognition_prompt(
     layout_type: str,
     additional_prompt: str = "",
 ) -> str:
+    tag_catalog = _build_tag_catalog(db)
     extra_instruction = f"\n补充要求：{additional_prompt}" if additional_prompt else ""
     grid_instruction = (
         "用户预期这是规则网格。请识别行数 rows、列数 cols，"
@@ -290,19 +297,26 @@ def build_box_template_recognition_prompt(
         grid_instruction if layout_type == "grid" else irregular_instruction
     )
     return (
-        "你是一个收纳盒模板布局识别助手。当前任务只要求识别盒子模板布局，"
-        "不要识别每个格子的元器件型号、名称、标签或参数。\n"
-        "第一优先级是布局：完整数出 rows、cols 和所有 position_identifier。\n"
+        "你是一个收纳盒模板与内容识别助手。请先识别盒子模板布局，再识别每个格子的元器件标签内容。\n"
+        "第一优先级是布局：完整数出 rows、cols 和所有 position_identifier；第二优先级是在不丢格子的前提下逐格识别内容。"
+        "必须从左到右、从上到下检查每个格子，不要只识别最清楚的少数格子。\n"
         f"布局偏好：{layout_type}\n"
         f"{layout_instruction}\n"
         "grid 模式下，cells 必须是完整布局骨架：从 R1C1 到 R{rows}C{cols} 连续列出所有位置，"
         "每一行都必须包含 C1 到 C{cols}，每一列都必须包含 R1 到 R{rows}。"
-        "所有 cells 项都只需要 position_identifier 和 is_empty；"
-        "is_empty 可以统一返回 true，不能因为内容看不清而省略位置。\n"
-        "template_name 只能按盒子结构特征命名。"
+        "不能因为格子为空、反光、标签看不清或内容识别不确定而省略 cell；"
+        "确认没有可识别元器件或标签内容的格子必须只返回 position_identifier 和 is_empty=true，"
+        "不得填写 component_type、name_parts、name、tags、attributes、display_attribute、search_recommended 或功能描述。"
+        "看不清但疑似有内容的格子仍返回 position_identifier，并设置 is_empty=true 或 notes。\n"
+        f"{COMPONENT_TYPE_RULE_TEXT}\n\n"
+        f"{COMPONENT_NAME_RULE_TEXT}\n\n"
+        f"{SEARCH_RECOMMENDATION_RULE_TEXT}\n\n"
+        f"{NOTES_RULE_TEXT}\n\n"
+        f"Tag 与属性库：\n{tag_catalog}\n\n"
+        "template_name 只能按盒子结构特征命名，不能包含识别到的盒内物品类别。"
         "规则网格命名按“列x行格”，即 cols 在前、rows 在后；例如 rows=13 且 cols=3 时写作 3x13格。"
         "不规则网格命名按“不规则N格”。"
-        "box_name 返回空字符串。"
+        f"box_name 才根据盒内主要元器件命名。{BOX_NAME_RULE_TEXT}\n"
         "layout_definition.rows 和 layout_definition.cols 必须返回 JSON number，不要返回字符串。"
         "layout_check 必须说明 rows 和 cols 的物理计数依据，且必须与 layout_definition 一致。\n"
         "请只返回一个 JSON 对象，不要返回 Markdown，不要额外解释。格式必须是：\n"
@@ -311,10 +325,23 @@ def build_box_template_recognition_prompt(
         '  "layout_type": "grid",\n'
         '  "layout_definition": {"rows": 13, "cols": 3},\n'
         '  "layout_check": {"row_count_basis": "计数依据", "col_count_basis": "计数依据"},\n'
-        '  "box_name": "",\n'
+        '  "box_name": "简短盒名",\n'
         '  "cells": [\n'
         "    {\n"
         '      "position_identifier": "R1C1",\n'
+        '      "is_empty": false,\n'
+        '      "component_type": "MODULE",\n'
+        '      "name_parts": {"model": "MODEL", "function": "功能词", "suffix": "功能后缀"},\n'
+        '      "name": "MODEL功能后缀",\n'
+        '      "tags": ["TAG_NAME"],\n'
+        '      "attributes": {"型号": "MODEL", "功能": "功能词"},\n'
+        '      "display_attribute": "型号",\n'
+        '      "search_recommended": true,\n'
+        '      "confidence": 0.82,\n'
+        '      "notes": "可选说明"\n'
+        "    },\n"
+        "    {\n"
+        '      "position_identifier": "R1C2",\n'
         '      "is_empty": true\n'
         "    }\n"
         "  ]\n"

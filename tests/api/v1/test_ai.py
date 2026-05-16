@@ -1,10 +1,12 @@
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from app import models, schemas
 from app.api.v1.endpoints import ai as ai_endpoint
@@ -27,6 +29,74 @@ def _grid_cells(rows: int, cols: int) -> list[dict[str, Any]]:
 def _admin_user_id(db: Session) -> int:
     user = db.query(AuthUser).filter(AuthUser.username == "admin").one()
     return int(user.id)
+
+
+def _copy_real_default_vlm_config_to_test_db(db: Session) -> int | None:
+    database_url = str(settings.DATABASE_URL)
+    if not database_url.endswith("_test"):
+        return None
+
+    prod_url = database_url.removesuffix("_test")
+    prod_session_factory = sessionmaker(
+        bind=create_engine(prod_url, pool_pre_ping=True),
+    )
+    prod_db = prod_session_factory()
+    try:
+        source = (
+            prod_db.query(models.VlmProviderConfig)
+            .filter(models.VlmProviderConfig.is_default.is_(True))
+            .order_by(models.VlmProviderConfig.id)
+            .first()
+        )
+        if source is None:
+            return None
+        db.query(models.VlmProviderConfig).update(
+            {models.VlmProviderConfig.is_default: False},
+        )
+        db.query(models.VlmProviderConfig).filter(
+            models.VlmProviderConfig.name == source.name,
+        ).delete()
+        copied_config = models.VlmProviderConfig(
+            name=source.name,
+            provider=source.provider,
+            base_url=source.base_url,
+            model_name=source.model_name,
+            api_key=source.api_key,
+            is_active=source.is_active,
+            is_default=True,
+            extra_config=source.extra_config or {},
+        )
+        db.add(copied_config)
+        db.commit()
+        db.refresh(copied_config)
+        return int(copied_config.id)
+    finally:
+        prod_db.close()
+
+
+def _assert_3x13_result_preserves_recognition_content(parsed_result: dict[str, Any]) -> None:
+    assert parsed_result["template_name"] == "3x13格"
+    assert parsed_result["layout_definition"] == {"rows": 13, "cols": 3}
+    cells = parsed_result["cells"]
+    assert len(cells) == 39
+    assert cells[0]["position_identifier"] == "R1C1"
+    assert cells[-1]["position_identifier"] == "R13C3"
+
+    content_cells = [cell for cell in cells if cell.get("name")]
+    assert content_cells
+    for cell in content_cells:
+        assert cell.get("component_type") in {"PASSIVE", "IC", "MODULE", "OTHER"}
+        assert isinstance(cell.get("name_parts"), dict)
+        assert cell.get("tags")
+        assert cell.get("attributes")
+        assert cell.get("search_recommended") in {True, False}
+        if cell["component_type"] == "PASSIVE":
+            assert cell["search_recommended"] is False
+        if cell["component_type"] == "IC":
+            assert cell["search_recommended"] is True
+        if cell["component_type"] == "MODULE":
+            has_model = bool(cell["name_parts"].get("model"))
+            assert cell["search_recommended"] is has_model
 
 
 def test_upsert_default_vlm_config_hides_api_key(client: TestClient) -> None:
@@ -842,6 +912,358 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
     assert layout_definition["rows"] == 13
     assert layout_definition["cols"] == 3
     assert len(content["parsed_result"]["cells"]) == 39
+
+
+def test_auto_template_session_applies_3x13_grid_hint_and_completes_cells(
+    client: TestClient,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
+    prompts: list[str] = []
+
+    def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
+        prompt = kwargs["messages"][0]["content"][0]["text"]
+        prompts.append(prompt)
+        assert "本地图像分析提示" in prompt
+        assert "rows=13, cols=3" in prompt
+        assert "完整数出 rows、cols" in prompt
+        assert "name_parts" in prompt
+        assert "search_recommended" in prompt
+        assert "所有 OCR text" not in prompt
+        return (
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "template_name": "3x12格",
+                                    "layout_type": "grid",
+                                    "layout_definition": {"rows": 12, "cols": 3},
+                                    "box_name": "模块",
+                                    "cells": [
+                                        {
+                                            "position_identifier": "R1C1",
+                                            "is_empty": False,
+                                            "component_type": "MODULE",
+                                            "name_parts": {
+                                                "model": "TTP223B",
+                                                "function": "触摸模块",
+                                                "suffix": "触摸模块",
+                                            },
+                                            "name": "TTP223B触摸模块",
+                                            "tags": ["模块"],
+                                            "attributes": {
+                                                "型号": "TTP223B",
+                                                "功能": "触摸模块",
+                                            },
+                                            "display_attribute": "型号",
+                                            "search_recommended": True,
+                                        }
+                                    ],
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+            31,
+        )
+
+    monkeypatch.setattr(
+        vlm_client,
+        "request_chat_completion",
+        fake_request_chat_completion,
+    )
+    monkeypatch.setattr(
+        web_search,
+        "fetch_search_snippets",
+        lambda *args, **kwargs: [],
+    )
+    config_response = client.put(
+        f"{settings.API_V1_STR}/ai/vlm_config",
+        json={
+            "name": "Auto Template Session Vision Model",
+            "provider": "openai-compatible",
+            "base_url": "https://example.com/v1",
+            "model_name": "vision-model",
+        },
+    )
+    assert config_response.status_code == 200
+
+    recognition_session = models.RecognitionSession(
+        owner_kind="user",
+        owner_id=_admin_user_id(db),
+        owner_name="admin",
+        mode="auto_template_box",
+        status="queued",
+        verification_status="idle",
+        filename=image_path.name,
+        content_type="image/jpeg",
+        config_id=config_response.json()["id"],
+        layout_type="grid",
+        additional_prompt="",
+        overwrite_existing=False,
+    )
+    db.add(recognition_session)
+    db.commit()
+    db.refresh(recognition_session)
+
+    ai_endpoint._run_recognition_session_with_db(
+        db=db,
+        session_id=recognition_session.id,
+        content=image_path.read_bytes(),
+        content_type="image/jpeg",
+    )
+    db.refresh(recognition_session)
+
+    assert prompts
+    assert recognition_session.status == "succeeded"
+    parsed_result = recognition_session.result["parsed_result"]
+    assert parsed_result["template_name"] == "3x13格"
+    assert parsed_result["layout_definition"] == {"rows": 13, "cols": 3}
+    assert len(parsed_result["cells"]) == 39
+    assert parsed_result["cells"][0]["name"] == "TTP223B触摸模块"
+    assert parsed_result["cells"][0]["search_recommended"] is True
+    assert parsed_result["cells"][-1]["position_identifier"] == "R13C3"
+
+
+def test_auto_template_session_clears_empty_cell_payload(
+    client: TestClient,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
+
+    def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
+        return (
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "template_name": "3x13格",
+                                    "layout_type": "grid",
+                                    "layout_definition": {"rows": 13, "cols": 3},
+                                    "box_name": "模块",
+                                    "cells": [
+                                        {
+                                            "position_identifier": "R1C2",
+                                            "is_empty": True,
+                                            "component_type": "OTHER",
+                                            "name_parts": {"function": "工具"},
+                                            "name": "工具",
+                                            "tags": ["工具"],
+                                            "attributes": {"功能": "工具"},
+                                            "search_recommended": True,
+                                        }
+                                    ],
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+            31,
+        )
+
+    monkeypatch.setattr(
+        vlm_client,
+        "request_chat_completion",
+        fake_request_chat_completion,
+    )
+    config_response = client.put(
+        f"{settings.API_V1_STR}/ai/vlm_config",
+        json={
+            "name": "Empty Cell Cleanup Vision Model",
+            "provider": "openai-compatible",
+            "base_url": "https://example.com/v1",
+            "model_name": "vision-model",
+        },
+    )
+    assert config_response.status_code == 200
+
+    recognition_session = models.RecognitionSession(
+        owner_kind="user",
+        owner_id=_admin_user_id(db),
+        owner_name="admin",
+        mode="auto_template_box",
+        status="queued",
+        verification_status="idle",
+        filename=image_path.name,
+        content_type="image/jpeg",
+        config_id=config_response.json()["id"],
+        layout_type="grid",
+        additional_prompt="",
+        overwrite_existing=False,
+    )
+    db.add(recognition_session)
+    db.commit()
+    db.refresh(recognition_session)
+
+    ai_endpoint._run_recognition_session_with_db(
+        db=db,
+        session_id=recognition_session.id,
+        content=image_path.read_bytes(),
+        content_type="image/jpeg",
+    )
+    db.refresh(recognition_session)
+
+    parsed_result = recognition_session.result["parsed_result"]
+    assert parsed_result["cells"][1] == {
+        "position_identifier": "R1C2",
+        "is_empty": True,
+    }
+
+
+def test_auto_template_session_keeps_3x13_grid_stable_for_five_runs(
+    client: TestClient,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
+
+    def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
+        return (
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "template_name": "3x12格",
+                                    "layout_type": "grid",
+                                    "layout_definition": {"rows": 12, "cols": 3},
+                                    "box_name": "模块",
+                                    "cells": _grid_cells(rows=12, cols=3),
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+            31,
+        )
+
+    monkeypatch.setattr(
+        vlm_client,
+        "request_chat_completion",
+        fake_request_chat_completion,
+    )
+    config_response = client.put(
+        f"{settings.API_V1_STR}/ai/vlm_config",
+        json={
+            "name": "Stable Auto Template Session Vision Model",
+            "provider": "openai-compatible",
+            "base_url": "https://example.com/v1",
+            "model_name": "vision-model",
+        },
+    )
+    assert config_response.status_code == 200
+
+    for index in range(5):
+        recognition_session = models.RecognitionSession(
+            owner_kind="user",
+            owner_id=_admin_user_id(db),
+            owner_name="admin",
+            mode="auto_template_box",
+            status="queued",
+            verification_status="idle",
+            filename=f"{index}-{image_path.name}",
+            content_type="image/jpeg",
+            config_id=config_response.json()["id"],
+            layout_type="grid",
+            additional_prompt="",
+            overwrite_existing=False,
+        )
+        db.add(recognition_session)
+        db.commit()
+        db.refresh(recognition_session)
+
+        ai_endpoint._run_recognition_session_with_db(
+            db=db,
+            session_id=recognition_session.id,
+            content=image_path.read_bytes(),
+            content_type="image/jpeg",
+        )
+        db.refresh(recognition_session)
+
+        parsed_result = recognition_session.result["parsed_result"]
+        assert parsed_result["template_name"] == "3x13格"
+        assert parsed_result["layout_definition"] == {"rows": 13, "cols": 3}
+        assert len(parsed_result["cells"]) == 39
+        assert parsed_result["cells"][-1]["position_identifier"] == "R13C3"
+
+
+def test_real_vlm_auto_template_session_keeps_3x13_stable_for_five_runs(
+    db: Session,
+) -> None:
+    api_key = os.environ.get("REAL_VLM_API_KEY")
+    model_name = os.environ.get("REAL_VLM_MODEL_NAME")
+    base_url = os.environ.get("REAL_VLM_BASE_URL")
+    provider = os.environ.get("REAL_VLM_PROVIDER", "openai-compatible")
+
+    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
+    config_id: int | None = None
+    if api_key and model_name and base_url:
+        config = models.VlmProviderConfig(
+            name="Real Stable Auto Template Session Vision Model",
+            provider=provider,
+            base_url=base_url,
+            model_name=model_name,
+            api_key=api_key,
+            is_active=True,
+            is_default=True,
+            extra_config={},
+        )
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+        config_id = int(config.id)
+    else:
+        config_id = _copy_real_default_vlm_config_to_test_db(db)
+
+    if config_id is None:
+        pytest.skip(
+            "Set REAL_VLM_API_KEY, REAL_VLM_MODEL_NAME, and REAL_VLM_BASE_URL, "
+            "or keep a default VLM config in the matching non-test database."
+        )
+
+    for index in range(5):
+        recognition_session = models.RecognitionSession(
+            owner_kind="user",
+            owner_id=1,
+            owner_name="admin",
+            mode="auto_template_box",
+            status="queued",
+            verification_status="idle",
+            filename=f"real-{index}-{image_path.name}",
+            content_type="image/jpeg",
+            config_id=config_id,
+            layout_type="grid",
+            additional_prompt="",
+            overwrite_existing=False,
+        )
+        db.add(recognition_session)
+        db.commit()
+        db.refresh(recognition_session)
+
+        ai_endpoint._run_recognition_session_with_db(
+            db=db,
+            session_id=recognition_session.id,
+            content=image_path.read_bytes(),
+            content_type="image/jpeg",
+        )
+        db.refresh(recognition_session)
+
+        assert recognition_session.status == "succeeded", recognition_session.error_message
+        parsed_result = recognition_session.result["parsed_result"]
+        _assert_3x13_result_preserves_recognition_content(parsed_result)
 
 
 def test_confirm_new_box_recognition_creates_box_and_inventory(

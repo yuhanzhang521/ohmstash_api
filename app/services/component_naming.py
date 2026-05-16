@@ -39,6 +39,17 @@ def normalize_component_names_in_parsed_result(
 def normalize_recognized_cell_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(payload)
     if normalized.get("is_empty"):
+        normalized["is_empty"] = True
+        for key in (
+            "name",
+            "component_type",
+            "name_parts",
+            "tags",
+            "attributes",
+            "display_attribute",
+            "search_recommended",
+        ):
+            normalized.pop(key, None)
         return normalized
 
     component_type = _clean_text(normalized.get("component_type"))
