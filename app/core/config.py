@@ -15,8 +15,9 @@ class Settings(BaseSettings):
     DATABASE_URL: Optional[str] = None
     LOG_LEVEL: str = "INFO"
     LOG_FILE_PATH: Optional[str] = None
-    DEFAULT_ADMIN_USERNAME: str = "admin"
-    DEFAULT_ADMIN_PASSWORD: str = "password"
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_INITIAL_PASSWORD: str = "password"
+    ADMIN_PASSWORD_RESET: str = ""
     SERVER_HOST: str = "0.0.0.0"
     HTTP_PORT: int = 8000
     HTTPS_ENABLED: bool = False
@@ -97,12 +98,6 @@ class Settings(BaseSettings):
             or bool(self.PUBLIC_BASE_URL or self.ACME_DOMAIN)
         )
 
-    def validate_runtime_security(self) -> None:
-        if not self.is_production_mode:
-            return
-        if self.DEFAULT_ADMIN_USERNAME == "admin" and self.DEFAULT_ADMIN_PASSWORD == "password":
-            raise ValueError("Default admin credentials cannot be used in production mode")
-
     @model_validator(mode="after")
     def assemble_database_url(self) -> "Settings":
         if self.DATABASE_URL:
@@ -136,4 +131,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-settings.validate_runtime_security()

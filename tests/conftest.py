@@ -26,6 +26,7 @@ def _ensure_safe_test_database(database_url: str) -> None:
 
 _ensure_safe_test_database(TEST_DATABASE_URL)
 settings.DATABASE_URL = TEST_DATABASE_URL
+settings.SERVER_HOST = "127.0.0.1"
 
 from app.core.migrations import reset_database_with_migrations
 from app.main import app
@@ -60,16 +61,28 @@ def db() -> Generator[Session, None, None]:
 
 
 @pytest.fixture()
-def client(db: Session) -> Generator[TestClient, None, None]:
+def client(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Generator[TestClient, None, None]:
     def override_get_db() -> Generator[Session, None, None]:
         yield db
 
     app.dependency_overrides[deps.get_db] = override_get_db
+    settings.ADMIN_INITIAL_PASSWORD = settings.ADMIN_INITIAL_PASSWORD or "password"
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"ADMIN_INITIAL_PASSWORD={settings.ADMIN_INITIAL_PASSWORD}\n"
+        "ADMIN_PASSWORD_RESET=\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.core.service_config.ENV_FILE", env_file)
     try:
         test_client = TestClient(app)
         response = test_client.post(
             f"{settings.API_V1_STR}/auth/login",
-            json={"username": "admin", "password": settings.DEFAULT_ADMIN_PASSWORD},
+            json={"username": "admin", "password": settings.ADMIN_INITIAL_PASSWORD},
         )
         assert response.status_code == 200
         test_client.headers.update(

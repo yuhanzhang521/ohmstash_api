@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Generator
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
@@ -12,9 +13,22 @@ from app.main import app
 from app.models.auth_session import AuthSession
 
 
-def test_protected_endpoint_requires_auth(db: Session) -> None:
+def test_protected_endpoint_requires_auth(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     def override_get_db() -> Generator[Session, None, None]:
         yield db
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ADMIN_INITIAL_PASSWORD=password\n"
+        "ADMIN_PASSWORD_RESET=\n",
+        encoding="utf-8",
+    )
+    settings.ADMIN_INITIAL_PASSWORD = "password"
+    monkeypatch.setattr("app.core.service_config.ENV_FILE", env_file)
 
     app.dependency_overrides[deps.get_db] = override_get_db
     try:
@@ -29,7 +43,7 @@ def test_protected_endpoint_requires_auth(db: Session) -> None:
 def test_default_admin_login_and_api_key_access(client: TestClient) -> None:
     login_response = client.post(
         f"{settings.API_V1_STR}/auth/login",
-        json={"username": "admin", "password": settings.DEFAULT_ADMIN_PASSWORD},
+        json={"username": "admin", "password": "password"},
     )
     assert login_response.status_code == 200
     assert login_response.json()["username"] == "admin"
@@ -50,7 +64,7 @@ def test_default_admin_login_and_api_key_access(client: TestClient) -> None:
 def test_user_session_token_is_persisted(client: TestClient, db: Session) -> None:
     login_response = client.post(
         f"{settings.API_V1_STR}/auth/login",
-        json={"username": "admin", "password": settings.DEFAULT_ADMIN_PASSWORD},
+        json={"username": "admin", "password": "password"},
     )
     assert login_response.status_code == 200
     token = login_response.json()["token"]

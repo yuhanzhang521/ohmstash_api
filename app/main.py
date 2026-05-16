@@ -12,7 +12,8 @@ from app.core.config import settings
 from app.core.logging_config import configure_logging
 from app.core.migrations import run_database_migrations
 from app.core.service_config import write_caddy_config
-from app.database import engine
+from app.database import SessionLocal, engine
+from app.services import auth
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _registered_models = models
@@ -24,6 +25,8 @@ configure_logging()
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     run_database_migrations(settings.DATABASE_URL, engine=engine)
+    with SessionLocal() as db:
+        auth.ensure_default_admin(db)
     if settings.CADDY_BACKEND_HOST == "api":
         try:
             write_caddy_config(settings)

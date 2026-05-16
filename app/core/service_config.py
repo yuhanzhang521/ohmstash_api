@@ -42,6 +42,11 @@ SERVER_CONFIG_KEYS = (
     "CADDY_CONFIG_PATH",
     "CADDY_BACKEND_HOST",
 )
+ADMIN_SECRET_KEYS = (
+    "ADMIN_INITIAL_PASSWORD",
+    "ADMIN_PASSWORD_RESET",
+)
+CONFIG_FILE_KEYS = SERVER_CONFIG_KEYS + ADMIN_SECRET_KEYS
 
 restart_required = False
 
@@ -338,8 +343,8 @@ def write_env_values(values: dict[str, str]) -> None:
             continue
         updated_lines.append(line)
 
-    for key in SERVER_CONFIG_KEYS:
-        if key not in seen:
+    for key in CONFIG_FILE_KEYS:
+        if key not in seen and key in values:
             updated_lines.append(f"{key}={format_env_value(values[key])}")
 
     ENV_FILE.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
@@ -350,7 +355,7 @@ def parse_env_key(line: str) -> Optional[str]:
     if not stripped or stripped.startswith("#") or "=" not in stripped:
         return None
     key = stripped.split("=", 1)[0].strip()
-    return key if key in SERVER_CONFIG_KEYS else None
+    return key if key in CONFIG_FILE_KEYS else None
 
 
 def format_env_value(value: str) -> str:
@@ -360,6 +365,12 @@ def format_env_value(value: str) -> str:
         escaped = value.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
     return value
+
+
+def clear_admin_secret(secret_key: str) -> None:
+    if secret_key not in ADMIN_SECRET_KEYS:
+        raise ValueError("Unsupported admin secret key")
+    write_env_values({secret_key: ""})
 
 
 def apply_runtime_settings(values: dict[str, str]) -> None:

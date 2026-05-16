@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from app.core.config import Settings
-from app.core.service_config import build_caddyfile, save_server_config
+from app.core.service_config import build_caddyfile, clear_admin_secret, save_server_config
 
 
 def test_save_server_config_updates_env_and_runtime_settings(
@@ -83,6 +83,26 @@ def test_save_server_config_writes_pasted_certificate_pair(
     assert "HTTPS_CERTIFICATE_SOURCE=path" in content
     assert f"SSL_CERTFILE={certfile.as_posix()}" in content
     assert f"SSL_KEYFILE={keyfile.as_posix()}" in content
+
+
+def test_clear_admin_secret_only_updates_target_secret(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DATABASE_URL=postgresql://user:password@host/db\n"
+        "ADMIN_INITIAL_PASSWORD=initial-password\n"
+        "ADMIN_PASSWORD_RESET=reset-password\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.core.service_config.ENV_FILE", env_file)
+
+    clear_admin_secret("ADMIN_PASSWORD_RESET")
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "ADMIN_INITIAL_PASSWORD=initial-password" in content
+    assert "ADMIN_PASSWORD_RESET=\n" in content
 
 
 def test_save_server_config_keeps_backend_http_port_for_acme(

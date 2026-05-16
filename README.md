@@ -76,7 +76,7 @@ python -m app.run
 https://127.0.0.1:8443/ui/
 ```
 
-首次启动时应用会自动创建数据库表并初始化默认管理员。默认账号由 `.env` 中的 `DEFAULT_ADMIN_USERNAME` 和 `DEFAULT_ADMIN_PASSWORD` 控制。
+首次启动时应用会自动创建数据库表并初始化管理员。账号由 `.env` 中的 `ADMIN_USERNAME` 控制；`ADMIN_INITIAL_PASSWORD` 只在数据库还没有管理员时使用，成功创建后会自动清空。忘记网页密码时，可临时填写 `ADMIN_PASSWORD_RESET` 并重启，应用会重置管理员密码并自动清空该字段。
 
 ## 配置项
 
@@ -93,8 +93,9 @@ https://127.0.0.1:8443/ui/
 | `API_V1_STR` | `/api/v1` | API v1 前缀。 |
 | `LOG_LEVEL` | `INFO` | 默认日志等级。 |
 | `LOG_FILE_PATH` | 空 | 日志文件路径；为空时使用默认日志文件。 |
-| `DEFAULT_ADMIN_USERNAME` | `admin` | 首次初始化管理员用户名。 |
-| `DEFAULT_ADMIN_PASSWORD` | `password` | 首次初始化管理员密码。 |
+| `ADMIN_USERNAME` | `admin` | 首次初始化管理员用户名。 |
+| `ADMIN_INITIAL_PASSWORD` | `password` | 首次初始化管理员密码；创建成功后会自动清空配置文件中的值。 |
+| `ADMIN_PASSWORD_RESET` | 空 | 忘记网页密码时填写的一次性重置密码；重置成功后会自动清空。 |
 | `SERVER_HOST` | `0.0.0.0` | `python -m app.run` 使用的监听地址。 |
 | `HTTP_PORT` | `8000` | HTTP 模式端口。 |
 | `HTTPS_ENABLED` | `false` | 是否启用 HTTPS 访问配置。非 ACME 时由 `python -m app.run` 直接监听 HTTPS；ACME 时由 Caddy 对外处理 HTTPS。 |
@@ -185,7 +186,7 @@ docker compose up -d
 
 ```env
 POSTGRES_PASSWORD=change-this-database-password
-DEFAULT_ADMIN_PASSWORD=change-this-admin-password
+ADMIN_INITIAL_PASSWORD=change-this-admin-password
 ```
 
 启动后访问：
@@ -205,6 +206,8 @@ docker compose up -d
 ```
 
 当前 Compose 不再把 API 的 `8000` 或 `8443` 发布到宿主机。API 容器内部保持 `HTTP_PORT=8000`，Caddy 通过 Docker 网络访问 `http://api:8000`。公网只发布 Caddy 的 `80:80`、`443:443` 和 `443:443/udp`。
+
+首次登录后建议立刻在 Web UI 中修改管理员密码。UI 修改密码只更新数据库，不会写回 `.env.docker`。如果忘记密码，在 `.env.docker` 中临时填写 `ADMIN_PASSWORD_RESET=<new-password>` 后执行 `docker compose up -d`，应用会把新密码哈希保存到数据库并自动清空该字段。
 
 默认 `HTTPS_ENABLED=false` 时，Caddy 会在 80 端口反向代理到 API。启用公网 HTTPS 时，进入「设置 -> 服务」，打开 HTTPS，并选择证书来源 `ACME`：
 
@@ -251,7 +254,7 @@ Docker 部署中的持久化数据：
 - 应用日志：`ohmstash-logs`，容器内路径 `/app/logs/ohmstash.log`。
 - Caddy ACME 证书和运行状态：`ohmstash-caddy-data`、`ohmstash-caddy-config`。
 - Caddyfile：宿主机项目目录下的 `caddy/Caddyfile` 会挂载给 Caddy，并由 API 在保存 ACME 设置时更新。
-- 服务配置：宿主机项目目录下的 `.env.docker` 会挂载为容器内 `/app/.env`，因此在 UI 中保存的服务端口和 ACME 配置会写回这个文件。
+- 服务配置：宿主机项目目录下的 `.env.docker` 会挂载为容器内 `/app/.env`，因此在 UI 中保存的服务端口和 ACME 配置会写回这个文件；一次性管理员初始密码或重置密码成功使用后也会被自动清空。
 
 备份数据库：
 
@@ -275,8 +278,9 @@ SERVER_HOST=0.0.0.0
 HTTP_PORT=8000
 HTTPS_ENABLED=true
 HTTPS_PORT=8443
-DEFAULT_ADMIN_USERNAME=admin
-DEFAULT_ADMIN_PASSWORD=change-this-password
+ADMIN_USERNAME=admin
+ADMIN_INITIAL_PASSWORD=change-this-password
+ADMIN_PASSWORD_RESET=
 LOG_LEVEL=INFO
 ```
 

@@ -1,8 +1,6 @@
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from app.core.config import Settings
 from app.run import build_uvicorn_config
 
@@ -18,15 +16,7 @@ def test_settings_use_http_port_by_default() -> None:
     assert not settings.ssl_enabled
 
 
-def test_runtime_security_rejects_default_credentials_on_exposed_host() -> None:
-    settings = Settings(
-        DATABASE_URL="postgresql://user:password@host/db",
-        DEFAULT_ADMIN_PASSWORD="password",
-    )
-
-    with pytest.raises(ValueError, match="Default admin credentials"):
-        settings.validate_runtime_security()
-
+def test_settings_assemble_database_url() -> None:
     settings = Settings(
         DATABASE_URL=None,
         POSTGRES_SERVER="db",
@@ -47,7 +37,7 @@ def test_settings_ignore_docker_only_environment_values(
 
     settings = Settings(
         _env_file=Path(".env.docker.example"),
-        DEFAULT_ADMIN_PASSWORD="docker-password",
+        ADMIN_INITIAL_PASSWORD="docker-password",
     )
 
     assert settings.POSTGRES_SERVER == "db"
@@ -62,7 +52,7 @@ def test_settings_use_https_port_when_enabled() -> None:
         HTTPS_PORT=9443,
         SSL_CERTFILE="/etc/ssl/cert.pem",
         SSL_KEYFILE="/etc/ssl/key.pem",
-        DEFAULT_ADMIN_PASSWORD="changed-password",
+        ADMIN_INITIAL_PASSWORD="changed-password",
     )
 
     assert settings.service_scheme == "https"
@@ -97,7 +87,7 @@ def test_uvicorn_config_generates_self_signed_certificate_for_https(
         DATABASE_URL="postgresql://user:password@host/db",
         HTTPS_ENABLED=True,
         HTTPS_PORT=9443,
-        DEFAULT_ADMIN_PASSWORD="changed-password",
+        ADMIN_INITIAL_PASSWORD="changed-password",
     )
     cert_dir = tmp_path / "certs"
     certfile = cert_dir / "selfsigned.crt"
@@ -125,7 +115,7 @@ def test_uvicorn_config_adds_ssl_files_when_configured(
         HTTPS_PORT=9443,
         SSL_CERTFILE="/etc/ssl/cert.pem",
         SSL_KEYFILE="/etc/ssl/key.pem",
-        DEFAULT_ADMIN_PASSWORD="changed-password",
+        ADMIN_INITIAL_PASSWORD="changed-password",
     )
     monkeypatch.setattr("app.run.settings", runtime_settings)
 
@@ -145,7 +135,7 @@ def test_uvicorn_config_uses_http_backend_for_caddy_acme(
         HTTPS_PORT=443,
         HTTPS_CERTIFICATE_SOURCE="acme",
         HTTP_PORT=8000,
-        DEFAULT_ADMIN_PASSWORD="changed-password",
+        ADMIN_INITIAL_PASSWORD="changed-password",
     )
     monkeypatch.setattr("app.run.settings", runtime_settings)
 
@@ -170,7 +160,7 @@ def test_uvicorn_config_forces_http_when_behind_reverse_proxy(
         SSL_CERTFILE="/etc/ssl/cert.pem",
         SSL_KEYFILE="/etc/ssl/key.pem",
         HTTP_PORT=8000,
-        DEFAULT_ADMIN_PASSWORD="changed-password",
+        ADMIN_INITIAL_PASSWORD="changed-password",
     )
     monkeypatch.setattr("app.run.settings", runtime_settings)
 

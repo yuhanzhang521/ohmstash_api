@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -8,6 +9,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.service_config import clear_admin_secret
 from app.models.api_key import ApiKey
 from app.models.auth_session import AuthSession
 from app.models.auth_user import AuthUser
@@ -17,6 +19,7 @@ SESSION_TOKEN_BYTES = 32
 API_KEY_BYTES = 32
 API_KEY_PREFIX = "ohm"
 SESSION_TOKEN_TTL_HOURS = 12
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,16 +66,43 @@ def hash_api_key(api_key: str) -> str:
 def ensure_default_admin(db: Session) -> AuthUser:
     user = db.query(AuthUser).order_by(AuthUser.id).first()
     if user:
+        reset_default_admin_password(db, user)
         return user
+    initial_password = settings.ADMIN_INITIAL_PASSWORD
+    if not initial_password:
+        raise ValueError("ADMIN_INITIAL_PASSWORD must be set before first startup")
+    if settings.is_production_mode and initial_password == "password":
+        raise ValueError("Default admin initial password cannot be used in production mode")
     user = AuthUser(
-        username=settings.DEFAULT_ADMIN_USERNAME,
-        password_hash=hash_password(settings.DEFAULT_ADMIN_PASSWORD),
+        username=settings.ADMIN_USERNAME,
+        password_hash=hash_password(initial_password),
         is_active=True,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
+    consume_admin_secret("ADMIN_INITIAL_PASSWORD")
     return user
+
+
+def reset_default_admin_password(db: Session, user: AuthUser) -> None:
+    reset_password = settings.ADMIN_PASSWORD_RESET
+    if not reset_password:
+        return
+    if settings.is_production_mode and reset_password == "password":
+        raise ValueError("Default admin reset password cannot be used in production mode")
+    user.password_hash = hash_password(reset_password)
+    db.add(user)
+    db.commit()
+    consume_admin_secret("ADMIN_PASSWORD_RESET")
+
+
+def consume_admin_secret(secret_key: str) -> None:
+    setattr(settings, secret_key, "")
+    try:
+        clear_admin_secret(secret_key)
+    except OSError:
+        logger.warning("Unable to clear %s from env file", secret_key, exc_info=True)
 
 
 def authenticate_user(
