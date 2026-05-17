@@ -12,7 +12,7 @@ from app import models, schemas
 from app.api.v1.endpoints import ai as ai_endpoint
 from app.core.config import settings
 from app.models.auth_user import AuthUser
-from app.services import recognition_prompt, vlm_client, web_search
+from app.services import recognition_prompt, vlm_client, vlm_config_service, web_search
 from app.services.component_naming import normalize_component_names_in_parsed_result
 
 TEST_DATA_DIR = Path(__file__).resolve().parents[2]
@@ -29,6 +29,30 @@ def _grid_cells(rows: int, cols: int) -> list[dict[str, Any]]:
 def _admin_user_id(db: Session) -> int:
     user = db.query(AuthUser).filter(AuthUser.username == "admin").one()
     return int(user.id)
+
+
+def _create_real_vlm_config(db: Session, *, name: str) -> int | None:
+    api_key = os.environ.get("REAL_VLM_API_KEY")
+    model_name = os.environ.get("REAL_VLM_MODEL_NAME")
+    base_url = os.environ.get("REAL_VLM_BASE_URL")
+    provider = os.environ.get("REAL_VLM_PROVIDER", "openai-compatible")
+
+    if api_key and model_name and base_url:
+        config = models.VlmProviderConfig(
+            name=name,
+            provider=provider,
+            base_url=base_url,
+            model_name=model_name,
+            api_key=api_key,
+            is_active=True,
+            is_default=True,
+            extra_config={},
+        )
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+        return int(config.id)
+    return _copy_real_default_vlm_config_to_test_db(db)
 
 
 def _copy_real_default_vlm_config_to_test_db(db: Session) -> int | None:
@@ -74,13 +98,24 @@ def _copy_real_default_vlm_config_to_test_db(db: Session) -> int | None:
         prod_db.close()
 
 
-def _assert_3x13_result_preserves_recognition_content(parsed_result: dict[str, Any]) -> None:
-    assert parsed_result["template_name"] == "3x13格"
-    assert parsed_result["layout_definition"] == {"rows": 13, "cols": 3}
+def _assert_grid_layout_result(
+    parsed_result: dict[str, Any],
+    *,
+    rows: int,
+    cols: int,
+) -> None:
+    assert parsed_result["layout_type"] == "grid"
+    assert parsed_result["template_name"] == f"{cols}x{rows}格"
+    assert parsed_result["layout_definition"] == {"rows": rows, "cols": cols}
     cells = parsed_result["cells"]
-    assert len(cells) == 39
+    assert len(cells) == rows * cols
     assert cells[0]["position_identifier"] == "R1C1"
-    assert cells[-1]["position_identifier"] == "R13C3"
+    assert cells[-1]["position_identifier"] == f"R{rows}C{cols}"
+
+
+def _assert_3x13_result_preserves_recognition_content(parsed_result: dict[str, Any]) -> None:
+    _assert_grid_layout_result(parsed_result, rows=13, cols=3)
+    cells = parsed_result["cells"]
 
     content_cells = [cell for cell in cells if cell.get("name")]
     assert content_cells
@@ -789,6 +824,27 @@ def test_recognize_box_layout_image_returns_template_definition(
 ) -> None:
     def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
         prompt = kwargs["messages"][0]["content"][0]["text"]
+        if "布局审校助手" in prompt:
+            assert kwargs["max_tokens"] == ai_endpoint.BOX_LAYOUT_RECOGNITION_AUDIT_MAX_TOKENS
+            return (
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"template_name": "不规则14格", '
+                                    '"layout_type": "irregular", '
+                                    '"layout_definition": {"cells": ['
+                                    '{"id": "A1", "label": "左上"}]}, '
+                                    '"cells": [{"position_identifier": "A1", '
+                                    '"is_empty": true}]}'
+                                )
+                            }
+                        }
+                    ]
+                },
+                27,
+            )
         assert "模板布局" in prompt
         assert "irregular" in prompt
         assert "尺寸一致的小收纳盒" in prompt
@@ -853,14 +909,34 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
     def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
         prompt = kwargs["messages"][0]["content"][0]["text"]
         image_url = kwargs["messages"][0]["content"][1]["image_url"]["url"]
+        assert image_url.startswith("data:image/jpeg;base64,")
+        if "布局审校助手" in prompt:
+            assert "initial_result JSON" in prompt
+            assert kwargs["max_tokens"] == ai_endpoint.BOX_LAYOUT_RECOGNITION_AUDIT_MAX_TOKENS
+            return (
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "template_name": "3x13格",
+                                        "layout_type": "grid",
+                                        "layout_definition": {"rows": 13, "cols": 3},
+                                        "cells": cells,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                },
+                31,
+            )
         assert "count physical compartments only" in prompt
         assert "rows * cols" in prompt
         assert "four inner borders" in prompt
-        assert "本地图像分析提示" in prompt
-        assert "rows=13, cols=3" in prompt
-        assert "horizontal_lines=14, vertical_lines=4" in prompt
         assert "3 列 13 行" not in prompt
-        assert image_url.startswith("data:image/jpeg;base64,")
         assert kwargs["max_tokens"] == ai_endpoint.BOX_LAYOUT_RECOGNITION_MAX_TOKENS
         return (
             {
@@ -913,8 +989,7 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
     assert layout_definition["cols"] == 3
     assert len(content["parsed_result"]["cells"]) == 39
 
-
-def test_auto_template_session_applies_3x13_grid_hint_and_completes_cells(
+def test_auto_template_session_keeps_vlm_grid_layout_without_local_override(
     client: TestClient,
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -922,47 +997,50 @@ def test_auto_template_session_applies_3x13_grid_hint_and_completes_cells(
     image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
     prompts: list[str] = []
 
+    result_payload = {
+        "template_name": "3x12格",
+        "layout_type": "grid",
+        "layout_definition": {"rows": 12, "cols": 3},
+        "box_name": "模块",
+        "cells": [
+            {
+                "position_identifier": "R1C1",
+                "is_empty": False,
+                "component_type": "MODULE",
+                "name_parts": {
+                    "model": "TTP223B",
+                    "function": "触摸模块",
+                    "suffix": "触摸模块",
+                },
+                "name": "TTP223B触摸模块",
+                "tags": ["模块"],
+                "attributes": {
+                    "型号": "TTP223B",
+                    "功能": "触摸模块",
+                },
+                "display_attribute": "型号",
+                "search_recommended": True,
+            }
+        ],
+    }
+
     def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
         prompt = kwargs["messages"][0]["content"][0]["text"]
         prompts.append(prompt)
-        assert "本地图像分析提示" in prompt
-        assert "rows=13, cols=3" in prompt
-        assert "完整数出 rows、cols" in prompt
-        assert "name_parts" in prompt
-        assert "search_recommended" in prompt
-        assert "所有 OCR text" not in prompt
+        if "布局审校助手" not in prompt:
+            assert "完整数出 rows、cols" in prompt
+            assert "name_parts" in prompt
+            assert "search_recommended" in prompt
+            assert "所有 OCR text" not in prompt
+        else:
+            assert "initial_result JSON" in prompt
         return (
             {
                 "choices": [
                     {
                         "message": {
                             "content": json.dumps(
-                                {
-                                    "template_name": "3x12格",
-                                    "layout_type": "grid",
-                                    "layout_definition": {"rows": 12, "cols": 3},
-                                    "box_name": "模块",
-                                    "cells": [
-                                        {
-                                            "position_identifier": "R1C1",
-                                            "is_empty": False,
-                                            "component_type": "MODULE",
-                                            "name_parts": {
-                                                "model": "TTP223B",
-                                                "function": "触摸模块",
-                                                "suffix": "触摸模块",
-                                            },
-                                            "name": "TTP223B触摸模块",
-                                            "tags": ["模块"],
-                                            "attributes": {
-                                                "型号": "TTP223B",
-                                                "功能": "触摸模块",
-                                            },
-                                            "display_attribute": "型号",
-                                            "search_recommended": True,
-                                        }
-                                    ],
-                                },
+                                result_payload,
                                 ensure_ascii=False,
                             )
                         }
@@ -1022,12 +1100,11 @@ def test_auto_template_session_applies_3x13_grid_hint_and_completes_cells(
     assert prompts
     assert recognition_session.status == "succeeded"
     parsed_result = recognition_session.result["parsed_result"]
-    assert parsed_result["template_name"] == "3x13格"
-    assert parsed_result["layout_definition"] == {"rows": 13, "cols": 3}
-    assert len(parsed_result["cells"]) == 39
+    assert parsed_result["template_name"] == "3x12格"
+    assert parsed_result["layout_definition"] == {"rows": 12, "cols": 3}
+    assert len(parsed_result["cells"]) == 1
     assert parsed_result["cells"][0]["name"] == "TTP223B触摸模块"
     assert parsed_result["cells"][0]["search_recommended"] is True
-    assert parsed_result["cells"][-1]["position_identifier"] == "R13C3"
 
 
 def test_auto_template_session_clears_empty_cell_payload(
@@ -1037,6 +1114,25 @@ def test_auto_template_session_clears_empty_cell_payload(
 ) -> None:
     image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
 
+    result_payload = {
+        "template_name": "3x13格",
+        "layout_type": "grid",
+        "layout_definition": {"rows": 13, "cols": 3},
+        "box_name": "模块",
+        "cells": [
+            {
+                "position_identifier": "R1C2",
+                "is_empty": True,
+                "component_type": "OTHER",
+                "name_parts": {"function": "工具"},
+                "name": "工具",
+                "tags": ["工具"],
+                "attributes": {"功能": "工具"},
+                "search_recommended": True,
+            }
+        ],
+    }
+
     def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
         return (
             {
@@ -1044,24 +1140,7 @@ def test_auto_template_session_clears_empty_cell_payload(
                     {
                         "message": {
                             "content": json.dumps(
-                                {
-                                    "template_name": "3x13格",
-                                    "layout_type": "grid",
-                                    "layout_definition": {"rows": 13, "cols": 3},
-                                    "box_name": "模块",
-                                    "cells": [
-                                        {
-                                            "position_identifier": "R1C2",
-                                            "is_empty": True,
-                                            "component_type": "OTHER",
-                                            "name_parts": {"function": "工具"},
-                                            "name": "工具",
-                                            "tags": ["工具"],
-                                            "attributes": {"功能": "工具"},
-                                            "search_recommended": True,
-                                        }
-                                    ],
-                                },
+                                result_payload,
                                 ensure_ascii=False,
                             )
                         }
@@ -1114,18 +1193,28 @@ def test_auto_template_session_clears_empty_cell_payload(
     db.refresh(recognition_session)
 
     parsed_result = recognition_session.result["parsed_result"]
-    assert parsed_result["cells"][1] == {
-        "position_identifier": "R1C2",
-        "is_empty": True,
-    }
+    assert parsed_result["cells"] == [
+        {
+            "position_identifier": "R1C2",
+            "is_empty": True,
+        }
+    ]
 
 
-def test_auto_template_session_keeps_3x13_grid_stable_for_five_runs(
+def test_auto_template_session_keeps_vlm_grid_layout_for_five_runs(
     client: TestClient,
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
+
+    result_payload = {
+        "template_name": "3x12格",
+        "layout_type": "grid",
+        "layout_definition": {"rows": 12, "cols": 3},
+        "box_name": "模块",
+        "cells": _grid_cells(rows=12, cols=3),
+    }
 
     def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
         return (
@@ -1134,13 +1223,7 @@ def test_auto_template_session_keeps_3x13_grid_stable_for_five_runs(
                     {
                         "message": {
                             "content": json.dumps(
-                                {
-                                    "template_name": "3x12格",
-                                    "layout_type": "grid",
-                                    "layout_definition": {"rows": 12, "cols": 3},
-                                    "box_name": "模块",
-                                    "cells": _grid_cells(rows=12, cols=3),
-                                },
+                                result_payload,
                                 ensure_ascii=False,
                             )
                         }
@@ -1194,76 +1277,150 @@ def test_auto_template_session_keeps_3x13_grid_stable_for_five_runs(
         db.refresh(recognition_session)
 
         parsed_result = recognition_session.result["parsed_result"]
-        assert parsed_result["template_name"] == "3x13格"
-        assert parsed_result["layout_definition"] == {"rows": 13, "cols": 3}
-        assert len(parsed_result["cells"]) == 39
-        assert parsed_result["cells"][-1]["position_identifier"] == "R13C3"
+        assert parsed_result["template_name"] == "3x12格"
+        assert parsed_result["layout_definition"] == {"rows": 12, "cols": 3}
+        assert len(parsed_result["cells"]) == 36
+        assert parsed_result["cells"][-1]["position_identifier"] == "R12C3"
+
+REAL_VLM_STABLE_RUN_COUNT = 3
+
+REAL_VLM_LAYOUT_CASES = [
+    ("recognition_irregular_2x5_plus_2x2.jpg", "irregular", None, None, 14),
+    ("recognition_grid_4x7_original.jpg", "grid", 7, 4, 28),
+    ("recognition_grid_8x7_original.jpg", "grid", 7, 8, 56),
+    ("recognition_3x13_grid.jpg", "grid", 13, 3, 39),
+    ("recognition_3x13_grid_original.jpg", "grid", 13, 3, 39),
+]
 
 
-def test_real_vlm_auto_template_session_keeps_3x13_stable_for_five_runs(
-    db: Session,
+def _assert_layout_case_result(
+    parsed_result: dict[str, Any],
+    *,
+    layout_type: str,
+    expected_rows: int | None,
+    expected_cols: int | None,
+    expected_cells: int,
 ) -> None:
-    api_key = os.environ.get("REAL_VLM_API_KEY")
-    model_name = os.environ.get("REAL_VLM_MODEL_NAME")
-    base_url = os.environ.get("REAL_VLM_BASE_URL")
-    provider = os.environ.get("REAL_VLM_PROVIDER", "openai-compatible")
-
-    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
-    config_id: int | None = None
-    if api_key and model_name and base_url:
-        config = models.VlmProviderConfig(
-            name="Real Stable Auto Template Session Vision Model",
-            provider=provider,
-            base_url=base_url,
-            model_name=model_name,
-            api_key=api_key,
-            is_active=True,
-            is_default=True,
-            extra_config={},
+    assert parsed_result["layout_type"] == layout_type
+    if layout_type == "grid":
+        assert expected_rows is not None
+        assert expected_cols is not None
+        _assert_grid_layout_result(
+            parsed_result,
+            rows=expected_rows,
+            cols=expected_cols,
         )
-        db.add(config)
-        db.commit()
-        db.refresh(config)
-        config_id = int(config.id)
-    else:
-        config_id = _copy_real_default_vlm_config_to_test_db(db)
+        return
 
+    cells = parsed_result["cells"]
+    assert len(cells) == expected_cells
+
+
+def _recognize_real_vlm_layout_case(
+    *,
+    db: Session,
+    config_id: int,
+    filename: str,
+    layout_type: str,
+) -> dict[str, Any]:
+    image_path = TEST_DATA_DIR / filename
+    content = image_path.read_bytes()
+    config = vlm_config_service.get_config_for_use(db=db, config_id=config_id)
+    response = ai_endpoint._recognize_image_with_config(
+        config=config,
+        filename=image_path.name,
+        content_type="image/jpeg",
+        content=content,
+        prompt=recognition_prompt.build_box_template_recognition_prompt(
+            db,
+            layout_type=layout_type,
+        ),
+        max_tokens=ai_endpoint.BOX_LAYOUT_RECOGNITION_MAX_TOKENS,
+    )
+    parsed_result = ai_endpoint._audit_box_template_layout_with_config(
+        config=config,
+        content_type="image/jpeg",
+        content=content,
+        layout_type=layout_type,
+        initial_result=response.parsed_result,
+    )
+    assert isinstance(parsed_result, dict)
+    return parsed_result
+
+
+@pytest.mark.parametrize(
+    ("filename", "layout_type", "expected_rows", "expected_cols", "expected_cells"),
+    REAL_VLM_LAYOUT_CASES,
+)
+def test_real_vlm_recognizes_target_box_layout_counts(
+    db: Session,
+    filename: str,
+    layout_type: str,
+    expected_rows: int | None,
+    expected_cols: int | None,
+    expected_cells: int,
+) -> None:
+    config_id = _create_real_vlm_config(
+        db,
+        name=f"Real Layout Count Vision Model {filename}",
+    )
     if config_id is None:
         pytest.skip(
             "Set REAL_VLM_API_KEY, REAL_VLM_MODEL_NAME, and REAL_VLM_BASE_URL, "
             "or keep a default VLM config in the matching non-test database."
         )
 
-    for index in range(5):
-        recognition_session = models.RecognitionSession(
-            owner_kind="user",
-            owner_id=1,
-            owner_name="admin",
-            mode="auto_template_box",
-            status="queued",
-            verification_status="idle",
-            filename=f"real-{index}-{image_path.name}",
-            content_type="image/jpeg",
-            config_id=config_id,
-            layout_type="grid",
-            additional_prompt="",
-            overwrite_existing=False,
-        )
-        db.add(recognition_session)
-        db.commit()
-        db.refresh(recognition_session)
+    parsed_result = _recognize_real_vlm_layout_case(
+        db=db,
+        config_id=config_id,
+        filename=filename,
+        layout_type=layout_type,
+    )
+    _assert_layout_case_result(
+        parsed_result,
+        layout_type=layout_type,
+        expected_rows=expected_rows,
+        expected_cols=expected_cols,
+        expected_cells=expected_cells,
+    )
 
-        ai_endpoint._run_recognition_session_with_db(
+
+@pytest.mark.parametrize(
+    ("filename", "layout_type", "expected_rows", "expected_cols", "expected_cells"),
+    REAL_VLM_LAYOUT_CASES,
+)
+def test_real_vlm_recognizes_target_box_layout_counts_three_times(
+    db: Session,
+    filename: str,
+    layout_type: str,
+    expected_rows: int | None,
+    expected_cols: int | None,
+    expected_cells: int,
+) -> None:
+    config_id = _create_real_vlm_config(
+        db,
+        name=f"Real Stable Layout Count Vision Model {filename}",
+    )
+    if config_id is None:
+        pytest.skip(
+            "Set REAL_VLM_API_KEY, REAL_VLM_MODEL_NAME, and REAL_VLM_BASE_URL, "
+            "or keep a default VLM config in the matching non-test database."
+        )
+
+    for _ in range(REAL_VLM_STABLE_RUN_COUNT):
+        parsed_result = _recognize_real_vlm_layout_case(
             db=db,
-            session_id=recognition_session.id,
-            content=image_path.read_bytes(),
-            content_type="image/jpeg",
+            config_id=config_id,
+            filename=filename,
+            layout_type=layout_type,
         )
-        db.refresh(recognition_session)
-
-        assert recognition_session.status == "succeeded", recognition_session.error_message
-        parsed_result = recognition_session.result["parsed_result"]
-        _assert_3x13_result_preserves_recognition_content(parsed_result)
+        _assert_layout_case_result(
+            parsed_result,
+            layout_type=layout_type,
+            expected_rows=expected_rows,
+            expected_cols=expected_cols,
+            expected_cells=expected_cells,
+        )
 
 
 def test_confirm_new_box_recognition_creates_box_and_inventory(

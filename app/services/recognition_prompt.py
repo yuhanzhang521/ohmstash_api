@@ -80,11 +80,21 @@ SEARCH_RECOMMENDATION_RULE_TEXT = (
 
 GRID_COUNT_RULE_TEXT = (
     "For a regular grid, count physical compartments only. Ignore parts, labels, text, color, and content visibility. "
-    "rows is the number of compartment bands between the inner top border and the inner bottom border. "
-    "cols is the number of compartment bands between the inner left border and the inner right border. "
-    "Use this procedure: find the four inner borders; count compartment cavities top-to-bottom and bottom-to-top; "
-    "count compartment cavities left-to-right and right-to-left; reconcile to the count that covers every cavity inside the borders. "
-    "Do not count divider lines as compartments: N internal divider lines usually create N+1 compartment bands. "
+    "rows is the number of physical compartment bands from the outermost usable top band to the outermost usable bottom band. "
+    "cols is the number of physical compartment bands from the outermost usable left band to the outermost usable right band. "
+    "Find the four inner borders, then count complete compartment cavities inside them; do not count divider lines as compartments. "
+    "N internal divider lines usually create N+1 compartment bands. "
+    "For shallow-angle photos of flat drawer organizers, each horizontal slot or drawer-front band is a row; "
+    "include bottom bands that have no labels, are reflective, faint, partly occluded, or look like the base lip. "
+    "Do not stop counting at the lowest clearly labeled or filled row. "
+    "Do not infer the row count from visible labels, object rows, text rows, or the number of clearly filled drawers. "
+    "If the organizer has 3 columns and many narrow horizontal bands, explicitly verify whether it has 13 rows before returning 10, 11, or 12 rows. "
+    "For tall transparent 3-column component drawer organizers, a 3x12 result is often caused by merging the lowest drawer-front band with the base edge; "
+    "trace the two vertical dividers through the bottom area and count the lowest band as row 13 when it is divided into three usable cavities inside the frame. "
+    "A row must be a usable compartment cavity divided consistently by the column walls; do not count an outer frame lip, base edge, shadow, reflection strip, bottom support shelf, decorative border, or continuous undivided base area as a row. "
+    "For wide organizers with many columns such as 8 columns, a bottom horizontal ledge or reflective strip below the lowest usable compartments is not an extra row unless it is clearly split by every vertical divider into usable cavities. "
+    "If you see or mention an additional bottom cavity, base lip cavity, unlabeled bottom band, or final complete empty row inside the frame, count it as a row and return 13 rather than 12. "
+    "The layout_check text and layout_definition must be numerically consistent; never say there is an additional row while keeping rows unchanged. "
     "Include outermost top, bottom, left, and right compartment bands even if they are empty, reflective, partially occluded, faint, or only partly visible. "
     "If two adjacent counts are plausible, choose the larger count when the extra band is still inside the inner box borders. "
     "Undercounting rows or cols is a critical error because real compartments lose position_identifier values. "
@@ -117,6 +127,33 @@ def _build_tag_catalog(db: Session) -> str:
 
     return "\n".join(tag_lines) if tag_lines else "当前数据库还没有定义 Tag。"
 
+
+def build_box_template_layout_audit_prompt(
+    *,
+    layout_type: str,
+    initial_result: Any,
+    additional_prompt: str = "",
+) -> str:
+    extra_instruction = f"\n补充要求：{additional_prompt}" if additional_prompt else ""
+    return (
+        "你是收纳盒模板布局审校助手。请只根据图片重新审校 initial_result 中的布局计数，"
+        "必要时修正 template_name、layout_definition 和 cells；不要使用本地图像算法或外部提示。\n"
+        "布局偏好是硬约束：如果 layout_type=grid，返回 layout_type 必须是 grid；"
+        "如果 layout_type=irregular，返回 layout_type 必须是 irregular，不能改成 grid。"
+        f"当前 layout_type：{layout_type}\n"
+        f"{GRID_COUNT_RULE_TEXT}\n"
+        "如果 layout_type=irregular，只数独立的小收纳盒/格子本身，不要把格内物品、螺丝、标签或内容当成 cell。"
+        "不要把外层托盘、外框、背景空隙、分隔边、剩余空白矩形或重复识别区域当成 cell。"
+        "对于左侧 2 列 x 5 排、右侧 2 x 2 竖放小盒的样式，必须返回 14 个 cell：左侧 10 个加右侧 4 个。"
+        "如果只数到 10 个 cell，通常是漏掉了右侧 2 x 2 的四个竖放小盒，必须补回这 4 个独立 cell。"
+        "如果 initial_result 返回 15 个 cell，必须重新检查并移除多出的非独立小盒、外框、空白区域或重复 cell。"
+        "如果 initial_result 的 cells 数量与图片中的物理格子数不一致，按图片修正。"
+        "grid 模式下必须返回从 R1C1 到 R{rows}C{cols} 的完整 cells 骨架。"
+        "空格只返回 position_identifier 和 is_empty=true。\n"
+        "请只返回完整 JSON 对象，不要返回 Markdown，不要额外解释。\n"
+        f"initial_result JSON：{json.dumps(initial_result, ensure_ascii=False)}"
+        f"{extra_instruction}"
+    )
 
 def build_component_recognition_prompt(
     db: Session,
@@ -279,11 +316,14 @@ def build_box_template_recognition_prompt(
         "row、col 表示这个小格左上角所在的可视网格坐标，必须能让前端按真实摆放复原布局，"
         "不要只在 notes 或 label 中写“左上、右下、竖放”等文字描述。"
         "如果画面中是若干尺寸一致的小收纳盒，只是摆放方向或分组不同，"
-        "请把每一个小收纳盒识别为一个 cell，不要把外层大盒误判为单一规则网格。"
+        "请把每一个小收纳盒识别为一个 cell，不要把外层大盒、托盘、外框、背景空隙、"
+        "分隔边、剩余空白矩形或重复识别区域误判为 cell。"
         "同款小盒横放和竖放都应视为同一规格的小格子，并在 cell 中写入 orientation，"
         "例如 landscape、portrait 或 rotated_90。"
         "常见样式包括左侧 2 列 x 5 排，右侧同款小盒旋转后按 2 x 2 摆放；"
-        "这种情况应返回 14 个 cell，并把右侧 4 个竖放小盒排成 2 x 2，"
+        "这种情况必须返回 14 个 cell：左侧 10 个横放小盒，加右侧 4 个竖放小盒。"
+        "右侧 4 个竖放小盒不能因为遮挡、反光、标签不清、只看到规格文字、与相邻格贴近、"
+        "或初次识别只返回左侧 10 个横放格而漏掉；必须逐个返回 2 x 2 的四个 cell。"
         "用 group、row、col、row_span、col_span 描述它们的相对位置。"
         "右侧竖放列必须按连续实际顺序排布；例如左侧五排横放每格 row_span=2 时，"
         "右侧上下两个竖放格应为 row=1,row_span=5 和 row=6,row_span=5，"

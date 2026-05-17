@@ -27,7 +27,6 @@ from app.models.search_provider_config import (
 from app.models.vlm_provider_config import VlmProviderConfig as VlmProviderConfigModel
 from app.services import auth
 from app.services import (
-    grid_layout_estimator,
     recognition_prompt,
     recognition_text_cleanup,
     vlm_client,
@@ -51,6 +50,7 @@ BOX_RECOGNITION_MIN_MAX_TOKENS = 3000
 BOX_RECOGNITION_MAX_TOKENS = 10000
 BOX_RECOGNITION_TOKENS_PER_CELL = 220
 BOX_LAYOUT_RECOGNITION_MAX_TOKENS = 10000
+BOX_LAYOUT_RECOGNITION_AUDIT_MAX_TOKENS = 10000
 RECOGNITION_SESSION_HISTORY_LIMIT = 50
 RECOGNITION_SESSION_MODES = {
     "single_image",
@@ -85,69 +85,6 @@ def _build_search_provider_settings(
         api_key=config.api_key,
         extra_config=config.extra_config or {},
     )
-
-
-def _build_grid_layout_hint_for_content(
-    *,
-    layout_type: Optional[str],
-    content: bytes,
-) -> Tuple[str, Optional[grid_layout_estimator.GridLayoutEstimate]]:
-    if layout_type != "grid":
-        return "", None
-    estimate = grid_layout_estimator.estimate_grid_layout(content)
-    return grid_layout_estimator.build_grid_layout_hint(estimate), estimate
-
-
-def _apply_grid_layout_estimate(
-    *,
-    parsed_result: Any,
-    estimate: Optional[grid_layout_estimator.GridLayoutEstimate],
-) -> Any:
-    if estimate is None or not isinstance(parsed_result, dict):
-        return parsed_result
-
-    result = dict(parsed_result)
-    result["layout_type"] = "grid"
-    result["layout_definition"] = {
-        **(
-            result.get("layout_definition")
-            if isinstance(result.get("layout_definition"), dict)
-            else {}
-        ),
-        "rows": estimate.rows,
-        "cols": estimate.cols,
-    }
-    result["template_name"] = f"{estimate.cols}x{estimate.rows}格"
-
-    raw_cells = result.get("cells")
-    cells_by_position: dict[str, dict[str, Any]] = {}
-    if isinstance(raw_cells, list):
-        for raw_cell in raw_cells:
-            if not isinstance(raw_cell, dict):
-                continue
-            position = raw_cell.get("position_identifier")
-            if position:
-                cells_by_position[str(position)] = dict(raw_cell)
-
-    normalized_cells: list[dict[str, Any]] = []
-    for row in range(1, estimate.rows + 1):
-        for col in range(1, estimate.cols + 1):
-            position = f"R{row}C{col}"
-            cell = cells_by_position.get(position, {"position_identifier": position})
-            has_content = any(
-                cell.get(key)
-                for key in (
-                    "name",
-                    "tags",
-                    "attributes",
-                    "name_parts",
-                    "notes",
-                )
-            )
-            cell.setdefault("is_empty", not has_content)
-            normalized_cells.append(cell)
-    result["cells"] = normalized_cells
-    return normalize_component_names_in_parsed_result(result)
 
 
 def _recognize_image_with_config(
@@ -198,6 +135,48 @@ def _recognize_image_with_config(
         parsed_result=parsed_result,
         latency_ms=latency_ms,
     )
+
+
+def _audit_box_template_layout_with_config(
+    *,
+    config: VlmProviderConfigModel,
+    content_type: str,
+    content: bytes,
+    layout_type: str,
+    initial_result: Any,
+    additional_prompt: str = "",
+) -> Any:
+    if not isinstance(initial_result, dict):
+        return initial_result
+
+    prompt = recognition_prompt.build_box_template_layout_audit_prompt(
+        layout_type=layout_type,
+        initial_result=initial_result,
+        additional_prompt=additional_prompt,
+    )
+    data_url = vlm_client.build_image_data_url(content, content_type)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        }
+    ]
+    try:
+        response, _ = vlm_client.request_chat_completion(
+            config=config,
+            messages=messages,
+            max_tokens=BOX_LAYOUT_RECOGNITION_AUDIT_MAX_TOKENS,
+        )
+    except vlm_client.VlmClientError:
+        raise
+
+    audited_result = normalize_component_names_in_parsed_result(
+        vlm_client.extract_json_object(vlm_client.extract_message_text(response)),
+    )
+    return audited_result or initial_result
 
 
 def _get_or_create_tag_ids(db: Session, *, tag_names: List[str]) -> List[int]:
@@ -1013,7 +992,6 @@ def _build_recognition_session_prompt(
     *,
     db: Session,
     recognition_session: models.RecognitionSession,
-    layout_hint: str = "",
 ) -> Tuple[str, int]:
     if recognition_session.mode == "single_image":
         return (
@@ -1059,7 +1037,7 @@ def _build_recognition_session_prompt(
         recognition_prompt.build_box_template_recognition_prompt(
             db,
             layout_type=recognition_session.layout_type or "grid",
-            additional_prompt=f"{recognition_session.additional_prompt}{layout_hint}",
+            additional_prompt=recognition_session.additional_prompt,
         ),
         BOX_LAYOUT_RECOGNITION_MAX_TOKENS,
     )
@@ -1109,16 +1087,9 @@ def _run_recognition_session_with_db(
             db=db,
             config_id=recognition_session.config_id,
         )
-        layout_hint, layout_estimate = _build_grid_layout_hint_for_content(
-            layout_type=recognition_session.layout_type
-            if recognition_session.mode == "auto_template_box"
-            else None,
-            content=content,
-        )
         prompt, max_tokens = _build_recognition_session_prompt(
             db=db,
             recognition_session=recognition_session,
-            layout_hint=layout_hint,
         )
         response = _recognize_image_with_config(
             config=config,
@@ -1129,10 +1100,15 @@ def _run_recognition_session_with_db(
             max_tokens=max_tokens,
         )
         result_data = response.model_dump(mode="json")
-        result_data["parsed_result"] = _apply_grid_layout_estimate(
-            parsed_result=result_data.get("parsed_result"),
-            estimate=layout_estimate,
-        )
+        if recognition_session.mode == "auto_template_box":
+            result_data["parsed_result"] = _audit_box_template_layout_with_config(
+                config=config,
+                content_type=content_type,
+                content=content,
+                layout_type=recognition_session.layout_type or "grid",
+                initial_result=result_data.get("parsed_result"),
+                additional_prompt=recognition_session.additional_prompt,
+            )
         selected_items = _extract_default_verification_items(
             result_data.get("parsed_result"),
         )
@@ -1544,14 +1520,10 @@ def recognize_box_layout_image(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     config = vlm_config_service.get_config_for_use(db=db, config_id=config_id)
-    layout_hint, layout_estimate = _build_grid_layout_hint_for_content(
-        layout_type=layout_type,
-        content=normalized_content,
-    )
     prompt = recognition_prompt.build_box_template_recognition_prompt(
         db,
         layout_type=layout_type,
-        additional_prompt=f"{additional_prompt}{layout_hint}",
+        additional_prompt=additional_prompt,
     )
     response = _recognize_image_with_config(
         config=config,
@@ -1561,9 +1533,13 @@ def recognize_box_layout_image(
         prompt=prompt,
         max_tokens=BOX_LAYOUT_RECOGNITION_MAX_TOKENS,
     )
-    response.parsed_result = _apply_grid_layout_estimate(
-        parsed_result=response.parsed_result,
-        estimate=layout_estimate,
+    response.parsed_result = _audit_box_template_layout_with_config(
+        config=config,
+        content_type=content_type,
+        content=normalized_content,
+        layout_type=layout_type,
+        initial_result=response.parsed_result,
+        additional_prompt=additional_prompt,
     )
     return response
 
