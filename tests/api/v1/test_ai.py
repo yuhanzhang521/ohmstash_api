@@ -850,9 +850,10 @@ def test_recognize_box_layout_image_returns_template_definition(
             )
         assert "模板布局" in prompt
         assert "irregular" in prompt
-        assert "尺寸一致的小收纳盒" in prompt
-        assert "数字 row、数字 col" in prompt
-        assert "不要只在 notes 或 label 中写" in prompt
+        assert "每一个独立的物理小盒" in prompt
+        assert "整数 row" in prompt
+        assert "整数 col" in prompt
+        assert "按列优先" in prompt
         assert "template_name 只能按盒子结构特征命名" in prompt
         assert kwargs["max_tokens"] == ai_endpoint.BOX_LAYOUT_RECOGNITION_MAX_TOKENS
         return (

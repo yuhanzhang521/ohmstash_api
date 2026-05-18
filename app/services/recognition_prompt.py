@@ -111,14 +111,7 @@ def build_box_template_layout_audit_prompt(
     additional_prompt: str = "",
 ) -> str:
     extra_instruction = f"\n补充要求：{additional_prompt}" if additional_prompt else ""
-    return (
-        "你是收纳盒模板布局审校助手。请只根据图片重新审校 initial_result 中的布局计数，"
-        "必要时修正 template_name、layout_definition 和 cells；不要使用本地图像算法或外部提示。\n"
-        "重要：initial_result 中 layout_definition.rows、layout_definition.cols、cells 的数量都可能是错的，"
-        "请独立从图片重新清点，不要把 initial_result 的数字当成基准或参考。\n"
-        "布局偏好是硬约束：如果 layout_type=grid，返回 layout_type 必须是 grid；"
-        "如果 layout_type=irregular，返回 layout_type 必须是 irregular，不能改成 grid。"
-        f"当前 layout_type：{layout_type}\n"
+    grid_instruction = (
         "如果是 grid 布局，请严格按下列步骤独立清点，不要把空格或连续相似的格子合并：\n"
         "  1) 先目测整张图，给出长轴方向大致有几行（gross_rows_estimate）、短轴方向大致有几列（gross_cols_estimate），"
         "写入 layout_check。这是粗估，不必精确，但应当与最终 rows/cols 在 ±1 以内。\n"
@@ -137,13 +130,41 @@ def build_box_template_layout_audit_prompt(
         "如果差距大于 1，说明枚举漏数或多数了，请回到步骤 3/4 重新检查后再给出最终结果。"
         "把 horizontal_line_count、vertical_line_count、rows、cols 同时写入 layout_check 和 layout_definition。\n"
         "  6) cells 必须是从 R1C1 到 R{rows}C{cols} 的完整骨架，长度恰好等于 rows × cols；"
-        "空格只返回 position_identifier 和 is_empty=true，不能省略任何位置。\n"
-        "如果是 irregular 布局，只数图片里独立的物理小盒/小格本身，每一个独立小盒就是一个 cell；"
-        "同款小盒横放和竖放仍按每一个独立小盒返回一个 cell，并通过 orientation 字段区分朝向，"
-        "不要因朝向不同而拆格、合并或漏数。"
-        "在 layout_check.row_count_basis 中按可视行从上到下逐项列出每个独立小盒的位置标识或可见特征，"
-        "在 layout_check.col_count_basis 中按可视列从左到右逐项列出每个独立小盒的位置标识或可见特征，"
-        "用这两份列表反向校验没有漏数。\n"
+        "空格只返回 position_identifier 和 is_empty=true，不能省略任何位置。"
+    )
+    irregular_instruction = (
+        "如果是 irregular 布局，目标是把图中每一个独立的物理小盒/小格识别为一个 cell。\n"
+        "  1) 先把 initial_result.layout_definition.cells / initial_result.cells 里已有的 cell 当作候选；"
+        "你要做的是在图片中**核对**这份候选是否覆盖了所有独立小盒。\n"
+        "  2) 如果候选中存在多个独立小盒被合并成一个 cell，或者明显漏掉了某个小盒，请新增/拆分；"
+        "如果候选中存在凭空多出的 cell（图中没有对应小盒），请删除。除此之外，不要随意改动 cells。\n"
+        "  3) 严禁把 cells 拍扁成单列（layout_definition.cols=1）或单行（layout_definition.rows=1），"
+        "除非图片里所有小盒确实只排成一列或一行。横放和竖放的小盒共存时，rows、cols 必须能容纳它们的真实空间排布。\n"
+        "  4) 每个 cell 必须输出：稳定的 id（按列优先编号 A1、A2、B1…）、label、整数 row（>=1）、"
+        "整数 col（>=1）、orientation（landscape 或 portrait）。若某个小盒跨多行或多列再加 row_span、col_span，"
+        "默认 row_span=col_span=1。所有 cell 的 (row, col, row_span, col_span) 拼起来必须**严密铺满**外层大盒的逻辑网格，"
+        "不重叠、不留空缺，使 sum(row_span × col_span) 恰好等于 rows × cols。\n"
+        "  5) 当不同区域的小盒数量不一致时（例如左 5 行横放 + 右 2 行竖放），用最小公倍数构造统一网格："
+        "高度比 5:2 → rows = LCM(5, 2) = 10，左横放每个 row_span=2、右竖放每个 row_span=5；"
+        "若是 3 行 vs 4 行 → rows = 12，左 row_span=4、右 row_span=3。宽度方向同理。\n"
+        "  6) 横放与竖放只用 orientation 区分，不要因为朝向不同而拆分或合并 cell。\n"
+        "  7) 在 layout_check.row_count_basis 中按列从上到下逐项列出每一列里有哪些独立小盒；"
+        "在 layout_check.col_count_basis 中按行从左到右逐项列出每一行里有哪些独立小盒；"
+        "用这两份列表反向校验 cells 数量与图中独立小盒数量一致。\n"
+        "  8) layout_type 必须返回 \"irregular\"，layout_definition.rows、layout_definition.cols 都是 JSON number。"
+    )
+    layout_instruction = (
+        grid_instruction if layout_type == "grid" else irregular_instruction
+    )
+    return (
+        "你是收纳盒模板布局审校助手。请只根据图片重新审校 initial_result 中的布局计数，"
+        "必要时修正 template_name、layout_definition 和 cells；不要使用本地图像算法或外部提示。\n"
+        "重要：initial_result 中 layout_definition.rows、layout_definition.cols、cells 的数量都可能是错的，"
+        "请独立从图片重新清点，不要把 initial_result 的数字当成基准或参考。\n"
+        "布局偏好是硬约束：如果 layout_type=grid，返回 layout_type 必须是 grid；"
+        "如果 layout_type=irregular，返回 layout_type 必须是 irregular，不能改成 grid。"
+        f"当前 layout_type：{layout_type}\n"
+        f"{layout_instruction}\n"
         "请只返回完整 JSON 对象，不要返回 Markdown，不要额外解释。\n"
         f"initial_result JSON：{json.dumps(initial_result, ensure_ascii=False)}"
         f"{extra_instruction}"
@@ -295,58 +316,43 @@ def build_box_template_recognition_prompt(
     extra_instruction = f"\n补充要求：{additional_prompt}" if additional_prompt else ""
     grid_instruction = (
         "用户预期这是规则网格。请识别行数 rows、列数 cols，"
-        "并使用 R1C1 这种 position_identifier 返回每个格子的结果。"
-    )
-    irregular_instruction = (
-        "用户预期这是不规则网格。请为每个可用格子生成稳定的 id，"
-        "例如 A1、A2、B1 或 CELL-01，并在 layout_definition 中返回 cells 列表。"
-        "每个 cells 项必须包含 id、label、数字 row、数字 col；如果有旋转、跨格或特殊尺寸，"
-        "继续增加 row_span、col_span、x、y、width、height。"
-        "row、col 表示这个小格左上角所在的可视网格坐标，必须能让前端按真实摆放复原布局，"
-        "不要只在 notes 或 label 中写“左上、右下、竖放”等文字描述。"
-        "把图片中每一个独立的物理小盒/小格识别为一个 cell；"
-        "外层大盒、托盘、外框、背景空隙、分隔边、剩余空白矩形、阴影、反光区域都不是 cell，"
-        "不要把外层大盒整体误判为单一规则网格。"
-        "同款小盒横放和竖放都应视为同一规格的小格子，并在 cell 中写入 orientation，"
-        "例如 landscape、portrait 或 rotated_90；横放和竖放只通过 orientation 字段区分，"
-        "不要因为朝向不同而把同一个小盒拆成多个 cell，也不要把多个小盒合并成一个 cell。"
-        "如果若干同款小盒被分成几组分别按不同方向并列摆放，"
-        "请用 group、row、col、row_span、col_span 描述每一组小盒的相对位置，"
-        "并保证全部独立小盒都返回为各自的 cell；"
-        "用 row、col、row_span、col_span 在统一网格上拼出每个小盒的位置时，"
-        "所有 cell 的矩形必须不重叠，也不能在物理小盒区域留下空缺。"
-        "不规则小格编号请按列优先，从左到右分列，每列从上到下编号，"
-        "例如第一列 A1、A2、A3，第二列 B1、B2、B3；不要按行优先编号。"
-        "layout_definition 可以包含 cols、rows、cell_size、cells，cells 顺序按从左到右、"
-        "从上到下排列。"
-    )
-    layout_instruction = (
-        grid_instruction if layout_type == "grid" else irregular_instruction
-    )
-    return (
-        "你是一个收纳盒模板与内容识别助手。请先识别盒子模板布局，再识别每个格子的元器件标签内容。\n"
-        "第一优先级是布局：完整数出 rows、cols 和所有 position_identifier；第二优先级是在不丢格子的前提下逐格识别内容。"
-        "必须从左到右、从上到下检查每个格子，不要只识别最清楚的少数格子。\n"
-        f"布局偏好：{layout_type}\n"
-        f"{layout_instruction}\n"
+        "并使用 R1C1 这种 position_identifier 返回每个格子的结果。\n"
         "grid 模式下，cells 必须是完整布局骨架：从 R1C1 到 R{rows}C{cols} 连续列出所有位置，"
         "每一行都必须包含 C1 到 C{cols}，每一列都必须包含 R1 到 R{rows}。"
         "不能因为格子为空、反光、标签看不清或内容识别不确定而省略 cell；"
         "确认没有可识别元器件或标签内容的格子必须只返回 position_identifier 和 is_empty=true，"
         "不得填写 component_type、name_parts、name、tags、attributes、display_attribute、search_recommended 或功能描述。"
-        "看不清但疑似有内容的格子仍返回 position_identifier，并设置 is_empty=true 或 notes。\n"
-        f"{COMPONENT_TYPE_RULE_TEXT}\n\n"
-        f"{COMPONENT_NAME_RULE_TEXT}\n\n"
-        f"{SEARCH_RECOMMENDATION_RULE_TEXT}\n\n"
-        f"{NOTES_RULE_TEXT}\n\n"
-        f"Tag 与属性库：\n{tag_catalog}\n\n"
-        "template_name 只能按盒子结构特征命名，不能包含识别到的盒内物品类别。"
-        "规则网格命名按“列x行格”，即 cols 在前、rows 在后；例如 rows=R 且 cols=C 时写作 CxR格。"
-        "不规则网格命名按“不规则N格”。"
-        f"box_name 才根据盒内主要元器件命名。{BOX_NAME_RULE_TEXT}\n"
-        "layout_definition.rows 和 layout_definition.cols 必须返回 JSON number，不要返回字符串。"
-        "layout_check 必须说明 rows 和 cols 的物理计数依据，且必须与 layout_definition 一致。\n"
-        "请只返回一个 JSON 对象，不要返回 Markdown，不要额外解释。格式必须是：\n"
+        "看不清但疑似有内容的格子仍返回 position_identifier，并设置 is_empty=true 或 notes。"
+    )
+    irregular_instruction = (
+        "用户预期这是不规则网格。返回的 layout_type 必须等于 \"irregular\"，"
+        "绝对不能改成 \"grid\"，即使图片看起来很像规则网格也不要切换。\n"
+        "把图片中每一个独立的物理小盒/小格识别为一个 cell；外层大盒、托盘、外框、"
+        "背景空隙、分隔边、剩余空白矩形、阴影、反光区域都不是 cell，"
+        "不要把外层大盒整体误判为单一规则网格。\n"
+        "同款小盒横放和竖放视为同一规格的小格子，并在 cell 中写入 orientation："
+        "横放写 landscape，竖放写 portrait；横放和竖放只通过 orientation 区分，"
+        "不要因为朝向不同而把同一个小盒拆成多个 cell，也不要把多个小盒合并成一个 cell。\n"
+        "每个 cell 必须给出：稳定的 id（如 A1、A2、B1）、label（盒上文字或简短描述）、"
+        "整数 row（>=1）、整数 col（>=1）、orientation。如果某个小盒在统一网格上覆盖多行或多列，"
+        "再加 row_span、col_span（不填默认为 1）。\n"
+        "row、col、row_span、col_span 用于在统一网格上拼出每个小盒的位置：所有 cell 的矩形**必须严密铺满外层大盒**，"
+        "不重叠、也不留空缺，使 sum(row_span × col_span) 恰好等于 rows × cols。\n"
+        "当不同区域的小盒物理高度或宽度不一致时，请用最小公倍数（LCM）构造统一网格："
+        "例如左区有 5 个横放小盒（左 5 行）、右区有 2 个竖放小盒（右 2 行），高度比 5:2，"
+        "应取 rows = LCM(5, 2) = 10：左侧每个横放小盒 row_span=2、col_span=1，"
+        "右侧每个竖放小盒 row_span=5、col_span=1。再例如左区 3 行、右区 4 行时，rows = LCM(3, 4) = 12，"
+        "左 row_span=4、右 row_span=3。宽度方向同理处理 cols 与 col_span。\n"
+        "cells 编号按列优先：第一列从上到下命名 A1、A2、A3…，第二列 B1、B2、B3…，依此类推；"
+        "不要按行优先。cells 数组里所有独立小盒都必须列出，cells 数量必须等于物理小盒数量；"
+        "禁止把多列拍扁成 col=1 单列、也禁止把多行拍扁成 row=1 单行。\n"
+        "layout_definition 必须包含整数 rows、整数 cols 与 cells 列表，rows、cols 表示统一网格的尺寸（可能等于 LCM 之后的值），"
+        "不是 cells 数量。"
+    )
+    layout_instruction = (
+        grid_instruction if layout_type == "grid" else irregular_instruction
+    )
+    grid_schema_example = (
         "{\n"
         '  "template_name": "CxR格",\n'
         '  "layout_type": "grid",\n'
@@ -372,6 +378,67 @@ def build_box_template_recognition_prompt(
         '      "is_empty": true\n'
         "    }\n"
         "  ]\n"
-        "}\n"
+        "}"
+    )
+    irregular_schema_example = (
+        "{\n"
+        '  "template_name": "不规则N格",\n'
+        '  "layout_type": "irregular",\n'
+        '  "layout_definition": {\n'
+        '    "rows": 5,\n'
+        '    "cols": 4,\n'
+        '    "cells": [\n'
+        '      {"id": "A1", "label": "标签文字", "row": 1, "col": 1, "row_span": 1, "col_span": 1, "orientation": "landscape"},\n'
+        '      {"id": "A2", "label": "标签文字", "row": 2, "col": 1, "row_span": 1, "col_span": 1, "orientation": "landscape"},\n'
+        '      {"id": "C1", "label": "标签文字", "row": 1, "col": 3, "row_span": 2, "col_span": 1, "orientation": "portrait"}\n'
+        "    ]\n"
+        "  },\n"
+        '  "layout_check": {"row_count_basis": "按列从上到下逐个独立小盒列举", "col_count_basis": "按行从左到右逐列列举"},\n'
+        '  "box_name": "简短盒名",\n'
+        '  "cells": [\n'
+        "    {\n"
+        '      "position_identifier": "A1",\n'
+        '      "is_empty": false,\n'
+        '      "row": 1, "col": 1, "row_span": 1, "col_span": 1, "orientation": "landscape",\n'
+        '      "component_type": "OTHER",\n'
+        '      "name_parts": {"function": "功能词", "spec": "规格"},\n'
+        '      "name": "完整名称",\n'
+        '      "tags": ["TAG_NAME"],\n'
+        '      "attributes": {"功能": "功能词", "规格": "规格"},\n'
+        '      "display_attribute": "规格",\n'
+        '      "search_recommended": false,\n'
+        '      "confidence": 0.9,\n'
+        '      "notes": ""\n'
+        "    },\n"
+        "    {\n"
+        '      "position_identifier": "C1",\n'
+        '      "is_empty": true,\n'
+        '      "row": 1, "col": 3, "row_span": 2, "col_span": 1, "orientation": "portrait"\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+    schema_example = (
+        grid_schema_example if layout_type == "grid" else irregular_schema_example
+    )
+    return (
+        "你是一个收纳盒模板与内容识别助手。请先识别盒子模板布局，再识别每个格子的元器件标签内容。\n"
+        "第一优先级是布局：完整覆盖所有独立小盒，不漏不并；第二优先级是逐格识别内容。"
+        "必须从左到右、从上到下检查每个格子，不要只识别最清楚的少数格子。\n"
+        f"布局偏好：{layout_type}\n"
+        f"{layout_instruction}\n"
+        f"{COMPONENT_TYPE_RULE_TEXT}\n\n"
+        f"{COMPONENT_NAME_RULE_TEXT}\n\n"
+        f"{SEARCH_RECOMMENDATION_RULE_TEXT}\n\n"
+        f"{NOTES_RULE_TEXT}\n\n"
+        f"Tag 与属性库：\n{tag_catalog}\n\n"
+        "template_name 只能按盒子结构特征命名，不能包含识别到的盒内物品类别。"
+        "规则网格命名按“列x行格”，即 cols 在前、rows 在后；例如 rows=R 且 cols=C 时写作 CxR格。"
+        "不规则网格命名按“不规则N格”，N 为独立小盒总数。"
+        f"box_name 才根据盒内主要元器件命名。{BOX_NAME_RULE_TEXT}\n"
+        "layout_definition.rows 和 layout_definition.cols 必须返回 JSON number，不要返回字符串。"
+        "layout_check 必须说明 rows 和 cols 的物理计数依据，且必须与 layout_definition 一致。\n"
+        "请只返回一个 JSON 对象，不要返回 Markdown，不要额外解释。格式必须严格遵循下面的示例结构：\n"
+        f"{schema_example}\n"
         f"{extra_instruction}"
     )

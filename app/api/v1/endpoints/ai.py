@@ -3,6 +3,7 @@ import logging
 import os
 import re
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
@@ -219,136 +220,143 @@ def _audit_box_template_layout_with_self_consistency(
     if not isinstance(initial_result, dict):
         return initial_result
 
-    runs = _resolve_layout_audit_runs() if layout_type == "grid" else 1
-    candidates: List[Dict[str, Any]] = []
-    last_error: Optional[vlm_client.VlmClientError] = None
-    for run_index in range(runs):
-        temperature = _layout_audit_temperature_for_run(run_index)
-        try:
-            candidate = _audit_box_template_layout_with_config(
-                config=config,
-                content_type=content_type,
-                content=content,
-                layout_type=layout_type,
-                initial_result=initial_result,
-                additional_prompt=additional_prompt,
-                temperature=temperature,
-            )
-        except vlm_client.VlmClientError as exc:
-            last_error = exc
-            logger.warning(
-                "Layout audit run %s/%s failed status=%s message=%s",
-                run_index + 1,
-                runs,
-                exc.status_code,
-                exc.message,
-            )
-            continue
-        if isinstance(candidate, dict):
-            candidates.append(candidate)
-            logger.info(
-                "Layout audit run %s/%s succeeded temperature=%s rows=%s cols=%s cells=%s",
-                run_index + 1,
-                runs,
-                temperature,
-                (candidate.get("layout_definition") or {}).get("rows"),
-                (candidate.get("layout_definition") or {}).get("cols"),
-                len(candidate.get("cells") or []),
-            )
+    if (
+        layout_type == "irregular"
+        and _irregular_result_looks_valid(initial_result)
+    ):
+        cells_count = len(_extract_irregular_cells(initial_result))
+        logger.info(
+            "Trusting initial irregular result (cells=%s); skipping audit",
+            cells_count,
+        )
+        return initial_result
 
-    rotated_dimensions: Optional[Tuple[int, int]] = None
+    runs = _resolve_layout_audit_runs()
+
+    rotated_content: Optional[bytes] = None
+    rotated_initial: Any = None
     if layout_type == "grid":
-        rotated_candidates = _audit_rotated_grid_dimensions(
+        try:
+            rotated_content = _rotate_image_90_cw(content, content_type=content_type)
+            rotated_initial = _swap_initial_result_dimensions(initial_result)
+        except Exception as exc:
+            logger.warning("Image rotation failed for cross-orientation audit: %s", exc)
+            rotated_content = None
+
+    standard_temperatures = [_layout_audit_temperature_for_run(i) for i in range(runs)]
+    rotated_temperatures = (
+        [_layout_audit_temperature_for_run(i) for i in range(runs)]
+        if rotated_content is not None
+        else []
+    )
+
+    def _run_standard(idx: int, temp: float) -> Tuple[str, int, float, Any]:
+        candidate = _audit_box_template_layout_with_config(
             config=config,
-            content=content,
             content_type=content_type,
+            content=content,
+            layout_type=layout_type,
             initial_result=initial_result,
             additional_prompt=additional_prompt,
+            temperature=temp,
         )
-        if rotated_candidates:
-            rotated_dimensions = (
-                max(rotated_rows for rotated_rows, _ in rotated_candidates),
-                max(rotated_cols for _, rotated_cols in rotated_candidates),
-            )
-            logger.info(
-                "Rotated audit aggregate candidates=%s -> max_rows=%s max_cols=%s",
-                rotated_candidates,
-                rotated_dimensions[0],
-                rotated_dimensions[1],
-            )
+        return "standard", idx, temp, candidate
 
-    if not candidates:
+    def _run_rotated(idx: int, temp: float) -> Tuple[str, int, float, Any]:
+        candidate = _audit_box_template_layout_with_config(
+            config=config,
+            content_type=content_type,
+            content=rotated_content,
+            layout_type="grid",
+            initial_result=rotated_initial,
+            additional_prompt=additional_prompt,
+            temperature=temp,
+        )
+        return "rotated", idx, temp, candidate
+
+    standard_candidates: List[Dict[str, Any]] = []
+    rotated_candidates: List[Tuple[int, int]] = []
+    last_error: Optional[vlm_client.VlmClientError] = None
+
+    total_tasks = len(standard_temperatures) + len(rotated_temperatures)
+    if total_tasks == 0:
+        return initial_result
+
+    with ThreadPoolExecutor(max_workers=total_tasks) as executor:
+        futures = []
+        for idx, temp in enumerate(standard_temperatures):
+            futures.append(executor.submit(_run_standard, idx, temp))
+        for idx, temp in enumerate(rotated_temperatures):
+            futures.append(executor.submit(_run_rotated, idx, temp))
+        for future in as_completed(futures):
+            try:
+                label, idx, temp, candidate = future.result()
+            except vlm_client.VlmClientError as exc:
+                last_error = exc
+                logger.warning(
+                    "Layout audit pass failed status=%s message=%s",
+                    exc.status_code,
+                    exc.message,
+                )
+                continue
+            if not isinstance(candidate, dict):
+                continue
+            if label == "standard":
+                standard_candidates.append(candidate)
+                logger.info(
+                    "Standard audit run %s/%s succeeded temperature=%s rows=%s cols=%s cells=%s",
+                    idx + 1,
+                    runs,
+                    temp,
+                    (candidate.get("layout_definition") or {}).get("rows"),
+                    (candidate.get("layout_definition") or {}).get("cols"),
+                    len(candidate.get("cells") or []),
+                )
+                continue
+            layout_def = candidate.get("layout_definition") or {}
+            rotated_rows = layout_def.get("rows")
+            rotated_cols = layout_def.get("cols")
+            if not isinstance(rotated_rows, int) or rotated_rows <= 0:
+                continue
+            if not isinstance(rotated_cols, int) or rotated_cols <= 0:
+                continue
+            swapped_rows = rotated_cols
+            swapped_cols = rotated_rows
+            logger.info(
+                "Rotated audit run %s/%s observed rotated_rows=%s rotated_cols=%s -> swapped rows=%s cols=%s temperature=%s",
+                idx + 1,
+                runs,
+                rotated_rows,
+                rotated_cols,
+                swapped_rows,
+                swapped_cols,
+                temp,
+            )
+            rotated_candidates.append((swapped_rows, swapped_cols))
+
+    rotated_dimensions: Optional[Tuple[int, int]] = None
+    if rotated_candidates:
+        rotated_dimensions = (
+            max(rotated_rows for rotated_rows, _ in rotated_candidates),
+            max(rotated_cols for _, rotated_cols in rotated_candidates),
+        )
+        logger.info(
+            "Rotated audit aggregate candidates=%s -> max_rows=%s max_cols=%s",
+            rotated_candidates,
+            rotated_dimensions[0],
+            rotated_dimensions[1],
+        )
+
+    if not standard_candidates:
         if last_error is not None:
             raise last_error
         return initial_result
 
     return _select_audit_candidate(
-        candidates=candidates,
+        candidates=standard_candidates,
         rotated_dimensions=rotated_dimensions,
         layout_type=layout_type,
     )
-
-
-def _audit_rotated_grid_dimensions(
-    *,
-    config: VlmProviderConfigModel,
-    content: bytes,
-    content_type: str,
-    initial_result: Any,
-    additional_prompt: str = "",
-) -> List[Tuple[int, int]]:
-    try:
-        rotated_content = _rotate_image_90_cw(content, content_type=content_type)
-    except Exception as exc:
-        logger.warning("Image rotation failed for cross-orientation audit: %s", exc)
-        return []
-    rotated_initial = _swap_initial_result_dimensions(initial_result)
-    runs = _resolve_layout_audit_runs()
-    candidates: List[Tuple[int, int]] = []
-    for run_index in range(runs):
-        temperature = _layout_audit_temperature_for_run(run_index)
-        try:
-            candidate = _audit_box_template_layout_with_config(
-                config=config,
-                content_type=content_type,
-                content=rotated_content,
-                layout_type="grid",
-                initial_result=rotated_initial,
-                additional_prompt=additional_prompt,
-                temperature=temperature,
-            )
-        except vlm_client.VlmClientError as exc:
-            logger.warning(
-                "Rotated audit pass %s/%s failed status=%s message=%s",
-                run_index + 1,
-                runs,
-                exc.status_code,
-                exc.message,
-            )
-            continue
-        if not isinstance(candidate, dict):
-            continue
-        layout_def = candidate.get("layout_definition") or {}
-        rotated_rows = layout_def.get("rows")
-        rotated_cols = layout_def.get("cols")
-        if not isinstance(rotated_rows, int) or rotated_rows <= 0:
-            continue
-        if not isinstance(rotated_cols, int) or rotated_cols <= 0:
-            continue
-        swapped_rows = rotated_cols
-        swapped_cols = rotated_rows
-        logger.info(
-            "Rotated audit run %s/%s observed rotated_rows=%s rotated_cols=%s -> swapped rows=%s cols=%s temperature=%s",
-            run_index + 1,
-            runs,
-            rotated_rows,
-            rotated_cols,
-            swapped_rows,
-            swapped_cols,
-            temperature,
-        )
-        candidates.append((swapped_rows, swapped_cols))
-    return candidates
 
 
 def _rotate_image_90_cw(content: bytes, *, content_type: str) -> bytes:
@@ -559,24 +567,85 @@ def _vote_with_undercount_bias(counter: Counter[int]) -> int:
 def _pick_irregular_audit_candidate(
     candidates: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    cells_counter: Counter[int] = Counter()
-    candidates_by_count: Dict[int, List[Dict[str, Any]]] = {}
-    for candidate in candidates:
-        cells = _extract_irregular_cells(candidate)
-        cells_count = len(cells)
-        if cells_count <= 0:
-            continue
-        cells_counter[cells_count] += 1
-        candidates_by_count.setdefault(cells_count, []).append(candidate)
-    if not cells_counter:
+    valid_candidates = [
+        candidate for candidate in candidates
+        if _irregular_result_looks_valid(candidate)
+    ]
+    pool = valid_candidates if valid_candidates else candidates
+    pool = [c for c in pool if _extract_irregular_cells(c)]
+    if not pool:
         return None
-    voted_count = _vote_with_undercount_bias(cells_counter)
+    chosen = max(pool, key=lambda c: len(_extract_irregular_cells(c)))
     logger.info(
-        "Irregular audit vote cells_count=%s dist=%s",
-        voted_count,
-        dict(cells_counter),
+        "Irregular audit pick valid=%s/%s chosen_cells=%s",
+        len(valid_candidates),
+        len(candidates),
+        len(_extract_irregular_cells(chosen)),
     )
-    return candidates_by_count[voted_count][0]
+    return chosen
+
+
+def _irregular_result_looks_valid(parsed_result: Any) -> bool:
+    if not isinstance(parsed_result, dict):
+        return False
+    if parsed_result.get("layout_type") != "irregular":
+        return False
+    cells = _extract_irregular_cells(parsed_result)
+    if not cells:
+        return False
+    return _irregular_cells_tile_rectangle(cells)
+
+
+def _irregular_cells_tile_rectangle(cells: List[Any]) -> bool:
+    rectangles = _extract_irregular_cell_rectangles(cells)
+    if not rectangles:
+        return False
+    occupancy: Dict[Tuple[int, int], int] = {}
+    for index, (row, col, row_span, col_span) in enumerate(rectangles):
+        for rr in range(row, row + row_span):
+            for cc in range(col, col + col_span):
+                key = (rr, cc)
+                if key in occupancy:
+                    return False
+                occupancy[key] = index
+    min_row = min(rect[0] for rect in rectangles)
+    min_col = min(rect[1] for rect in rectangles)
+    max_row_exclusive = max(rect[0] + rect[2] for rect in rectangles)
+    max_col_exclusive = max(rect[1] + rect[3] for rect in rectangles)
+    bounding = (max_row_exclusive - min_row) * (max_col_exclusive - min_col)
+    return bounding == len(occupancy)
+
+
+def _extract_irregular_cell_rectangles(
+    cells: List[Any],
+) -> Optional[List[Tuple[int, int, int, int]]]:
+    rectangles: List[Tuple[int, int, int, int]] = []
+    for cell in cells:
+        if not isinstance(cell, dict):
+            return None
+        row_raw = cell.get("row")
+        col_raw = cell.get("col")
+        if not (isinstance(row_raw, int) and row_raw >= 1):
+            return None
+        if not (isinstance(col_raw, int) and col_raw >= 1):
+            return None
+        row_span = (
+            cell.get("row_span")
+            or cell.get("rowSpan")
+            or 1
+        )
+        col_span = (
+            cell.get("col_span")
+            or cell.get("colSpan")
+            or cell.get("column_span")
+            or 1
+        )
+        if not (isinstance(row_span, int) and row_span >= 1):
+            return None
+        if not (isinstance(col_span, int) and col_span >= 1):
+            return None
+        rectangles.append((row_raw - 1, col_raw - 1, row_span, col_span))
+    return rectangles
 
 
 def _extract_irregular_cells(candidate: Dict[str, Any]) -> List[Any]:
