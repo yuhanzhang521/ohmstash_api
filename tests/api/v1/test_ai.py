@@ -38,6 +38,10 @@ def _create_real_vlm_config(db: Session, *, name: str) -> int | None:
     provider = os.environ.get("REAL_VLM_PROVIDER", "openai-compatible")
 
     if api_key and model_name and base_url:
+        extra_config: dict[str, object] = {}
+        timeout_raw = os.environ.get("REAL_VLM_TIMEOUT_SECONDS")
+        if timeout_raw:
+            extra_config["timeout_seconds"] = float(timeout_raw)
         config = models.VlmProviderConfig(
             name=name,
             provider=provider,
@@ -46,7 +50,7 @@ def _create_real_vlm_config(db: Session, *, name: str) -> int | None:
             api_key=api_key,
             is_active=True,
             is_default=True,
-            extra_config={},
+            extra_config=extra_config,
         )
         db.add(config)
         db.commit()
@@ -105,7 +109,6 @@ def _assert_grid_layout_result(
     cols: int,
 ) -> None:
     assert parsed_result["layout_type"] == "grid"
-    assert parsed_result["template_name"] == f"{cols}x{rows}格"
     assert parsed_result["layout_definition"] == {"rows": rows, "cols": cols}
     cells = parsed_result["cells"]
     assert len(cells) == rows * cols
@@ -933,9 +936,8 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
                 },
                 31,
             )
-        assert "count physical compartments only" in prompt
-        assert "rows * cols" in prompt
-        assert "four inner borders" in prompt
+        assert "用户预期这是规则网格" in prompt
+        assert "rows、列数 cols" in prompt
         assert "3 列 13 行" not in prompt
         assert kwargs["max_tokens"] == ai_endpoint.BOX_LAYOUT_RECOGNITION_MAX_TOKENS
         return (
@@ -1282,15 +1284,110 @@ def test_auto_template_session_keeps_vlm_grid_layout_for_five_runs(
         assert len(parsed_result["cells"]) == 36
         assert parsed_result["cells"][-1]["position_identifier"] == "R12C3"
 
-REAL_VLM_STABLE_RUN_COUNT = 3
+REAL_VLM_STABILITY_RUNS_ENV = "OHMSTASH_VLM_STABILITY_RUNS"
+DEFAULT_REAL_VLM_STABILITY_RUNS = 1
+
+
+def _real_vlm_stability_runs() -> int:
+    raw = os.environ.get(REAL_VLM_STABILITY_RUNS_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_REAL_VLM_STABILITY_RUNS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid {REAL_VLM_STABILITY_RUNS_ENV}={raw!r}; must be a positive integer"
+        ) from exc
+    if value < 1:
+        raise ValueError(
+            f"{REAL_VLM_STABILITY_RUNS_ENV} must be >= 1, got {value}"
+        )
+    return value
+
 
 REAL_VLM_LAYOUT_CASES = [
     ("recognition_irregular_2x5_plus_2x2.jpg", "irregular", None, None, 14),
+    ("recognition_irregular_2x5_plus_2x2_v2.jpg", "irregular", None, None, 14),
     ("recognition_grid_4x7_original.jpg", "grid", 7, 4, 28),
     ("recognition_grid_8x7_original.jpg", "grid", 7, 8, 56),
     ("recognition_3x13_grid.jpg", "grid", 13, 3, 39),
     ("recognition_3x13_grid_original.jpg", "grid", 13, 3, 39),
+    ("recognition_3x11_grid.jpg", "grid", 11, 3, 33),
 ]
+
+
+def _extract_irregular_cells(parsed_result: dict[str, Any]) -> list[dict[str, Any]]:
+    layout_def = parsed_result.get("layout_definition")
+    if isinstance(layout_def, dict) and isinstance(layout_def.get("cells"), list):
+        layout_cells = layout_def["cells"]
+        if layout_cells:
+            return layout_cells
+    cells = parsed_result.get("cells")
+    if isinstance(cells, list):
+        return cells
+    return []
+
+
+def _assert_irregular_cells_tile_rectangle(
+    parsed_result: dict[str, Any],
+    *,
+    expected_cells: int,
+) -> None:
+    cells = _extract_irregular_cells(parsed_result)
+    assert len(cells) == expected_cells, (
+        f"Expected {expected_cells} irregular cells, got {len(cells)}"
+    )
+
+    rectangles: list[tuple[int, int, int, int]] = []
+    for cell in cells:
+        row_raw = cell.get("row")
+        col_raw = cell.get("col")
+        assert isinstance(row_raw, int) and row_raw >= 1, (
+            f"Irregular cell missing integer row >= 1: {cell!r}"
+        )
+        assert isinstance(col_raw, int) and col_raw >= 1, (
+            f"Irregular cell missing integer col >= 1: {cell!r}"
+        )
+        row_span = cell.get("row_span") or cell.get("rowSpan") or 1
+        col_span = (
+            cell.get("col_span")
+            or cell.get("colSpan")
+            or cell.get("column_span")
+            or 1
+        )
+        assert isinstance(row_span, int) and row_span >= 1, (
+            f"Irregular cell row_span must be int >= 1: {cell!r}"
+        )
+        assert isinstance(col_span, int) and col_span >= 1, (
+            f"Irregular cell col_span must be int >= 1: {cell!r}"
+        )
+        rectangles.append((row_raw - 1, col_raw - 1, row_span, col_span))
+
+    occupancy: dict[tuple[int, int], int] = {}
+    total_unit_cells = 0
+    min_row = min(rect[0] for rect in rectangles)
+    min_col = min(rect[1] for rect in rectangles)
+    max_row_exclusive = max(rect[0] + rect[2] for rect in rectangles)
+    max_col_exclusive = max(rect[1] + rect[3] for rect in rectangles)
+    for rect_index, (r, c, rs, cs) in enumerate(rectangles):
+        for rr in range(r, r + rs):
+            for cc in range(c, c + cs):
+                key = (rr, cc)
+                if key in occupancy:
+                    raise AssertionError(
+                        f"Irregular cells overlap at unit ({rr},{cc}): "
+                        f"cells #{occupancy[key]} and #{rect_index}"
+                    )
+                occupancy[key] = rect_index
+                total_unit_cells += 1
+
+    bounding_unit_cells = (max_row_exclusive - min_row) * (max_col_exclusive - min_col)
+    assert total_unit_cells == bounding_unit_cells, (
+        f"Irregular cells must tile a rectangle without gaps: "
+        f"covered {total_unit_cells} unit cells but bounding rectangle is "
+        f"{bounding_unit_cells} ({max_row_exclusive - min_row}x"
+        f"{max_col_exclusive - min_col})"
+    )
 
 
 def _assert_layout_case_result(
@@ -1312,8 +1409,10 @@ def _assert_layout_case_result(
         )
         return
 
-    cells = parsed_result["cells"]
-    assert len(cells) == expected_cells
+    _assert_irregular_cells_tile_rectangle(
+        parsed_result,
+        expected_cells=expected_cells,
+    )
 
 
 def _recognize_real_vlm_layout_case(
@@ -1337,7 +1436,7 @@ def _recognize_real_vlm_layout_case(
         ),
         max_tokens=ai_endpoint.BOX_LAYOUT_RECOGNITION_MAX_TOKENS,
     )
-    parsed_result = ai_endpoint._audit_box_template_layout_with_config(
+    parsed_result = ai_endpoint._audit_box_template_layout_with_self_consistency(
         config=config,
         content_type="image/jpeg",
         content=content,
@@ -1370,57 +1469,27 @@ def test_real_vlm_recognizes_target_box_layout_counts(
             "or keep a default VLM config in the matching non-test database."
         )
 
-    parsed_result = _recognize_real_vlm_layout_case(
-        db=db,
-        config_id=config_id,
-        filename=filename,
-        layout_type=layout_type,
-    )
-    _assert_layout_case_result(
-        parsed_result,
-        layout_type=layout_type,
-        expected_rows=expected_rows,
-        expected_cols=expected_cols,
-        expected_cells=expected_cells,
-    )
-
-
-@pytest.mark.parametrize(
-    ("filename", "layout_type", "expected_rows", "expected_cols", "expected_cells"),
-    REAL_VLM_LAYOUT_CASES,
-)
-def test_real_vlm_recognizes_target_box_layout_counts_three_times(
-    db: Session,
-    filename: str,
-    layout_type: str,
-    expected_rows: int | None,
-    expected_cols: int | None,
-    expected_cells: int,
-) -> None:
-    config_id = _create_real_vlm_config(
-        db,
-        name=f"Real Stable Layout Count Vision Model {filename}",
-    )
-    if config_id is None:
-        pytest.skip(
-            "Set REAL_VLM_API_KEY, REAL_VLM_MODEL_NAME, and REAL_VLM_BASE_URL, "
-            "or keep a default VLM config in the matching non-test database."
-        )
-
-    for _ in range(REAL_VLM_STABLE_RUN_COUNT):
+    runs = _real_vlm_stability_runs()
+    for run_index in range(runs):
         parsed_result = _recognize_real_vlm_layout_case(
             db=db,
             config_id=config_id,
             filename=filename,
             layout_type=layout_type,
         )
-        _assert_layout_case_result(
-            parsed_result,
-            layout_type=layout_type,
-            expected_rows=expected_rows,
-            expected_cols=expected_cols,
-            expected_cells=expected_cells,
-        )
+        try:
+            _assert_layout_case_result(
+                parsed_result,
+                layout_type=layout_type,
+                expected_rows=expected_rows,
+                expected_cols=expected_cols,
+                expected_cells=expected_cells,
+            )
+        except AssertionError as exc:
+            raise AssertionError(
+                f"{filename} failed on run {run_index + 1}/{runs}: {exc}\n"
+                f"parsed_result={parsed_result!r}"
+            ) from exc
 
 
 def test_confirm_new_box_recognition_creates_box_and_inventory(

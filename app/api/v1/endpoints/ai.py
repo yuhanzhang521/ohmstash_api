@@ -1,8 +1,13 @@
 import json
 import logging
+import os
 import re
+from collections import Counter
 from datetime import datetime, timezone
+from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
+
+from PIL import Image, ImageOps
 
 from fastapi import (
     APIRouter,
@@ -58,6 +63,9 @@ RECOGNITION_SESSION_MODES = {
     "new_box",
     "auto_template_box",
 }
+LAYOUT_AUDIT_RUNS_ENV = "OHMSTASH_LAYOUT_AUDIT_RUNS"
+DEFAULT_LAYOUT_AUDIT_RUNS = 3
+LAYOUT_AUDIT_TEMPERATURES: Tuple[float, ...] = (0.0, 0.2, 0.4)
 
 
 def _get_search_provider_config_for_use(
@@ -145,6 +153,7 @@ def _audit_box_template_layout_with_config(
     layout_type: str,
     initial_result: Any,
     additional_prompt: str = "",
+    temperature: Optional[float] = None,
 ) -> Any:
     if not isinstance(initial_result, dict):
         return initial_result
@@ -169,6 +178,7 @@ def _audit_box_template_layout_with_config(
             config=config,
             messages=messages,
             max_tokens=BOX_LAYOUT_RECOGNITION_AUDIT_MAX_TOKENS,
+            temperature=temperature,
         )
     except vlm_client.VlmClientError:
         raise
@@ -177,6 +187,406 @@ def _audit_box_template_layout_with_config(
         vlm_client.extract_json_object(vlm_client.extract_message_text(response)),
     )
     return audited_result or initial_result
+
+
+def _resolve_layout_audit_runs() -> int:
+    raw = os.environ.get(LAYOUT_AUDIT_RUNS_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_LAYOUT_AUDIT_RUNS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_LAYOUT_AUDIT_RUNS
+    return max(1, value)
+
+
+def _layout_audit_temperature_for_run(run_index: int) -> float:
+    if not LAYOUT_AUDIT_TEMPERATURES:
+        return 0.0
+    bounded_index = min(run_index, len(LAYOUT_AUDIT_TEMPERATURES) - 1)
+    return LAYOUT_AUDIT_TEMPERATURES[bounded_index]
+
+
+def _audit_box_template_layout_with_self_consistency(
+    *,
+    config: VlmProviderConfigModel,
+    content_type: str,
+    content: bytes,
+    layout_type: str,
+    initial_result: Any,
+    additional_prompt: str = "",
+) -> Any:
+    if not isinstance(initial_result, dict):
+        return initial_result
+
+    runs = _resolve_layout_audit_runs() if layout_type == "grid" else 1
+    candidates: List[Dict[str, Any]] = []
+    last_error: Optional[vlm_client.VlmClientError] = None
+    for run_index in range(runs):
+        temperature = _layout_audit_temperature_for_run(run_index)
+        try:
+            candidate = _audit_box_template_layout_with_config(
+                config=config,
+                content_type=content_type,
+                content=content,
+                layout_type=layout_type,
+                initial_result=initial_result,
+                additional_prompt=additional_prompt,
+                temperature=temperature,
+            )
+        except vlm_client.VlmClientError as exc:
+            last_error = exc
+            logger.warning(
+                "Layout audit run %s/%s failed status=%s message=%s",
+                run_index + 1,
+                runs,
+                exc.status_code,
+                exc.message,
+            )
+            continue
+        if isinstance(candidate, dict):
+            candidates.append(candidate)
+            logger.info(
+                "Layout audit run %s/%s succeeded temperature=%s rows=%s cols=%s cells=%s",
+                run_index + 1,
+                runs,
+                temperature,
+                (candidate.get("layout_definition") or {}).get("rows"),
+                (candidate.get("layout_definition") or {}).get("cols"),
+                len(candidate.get("cells") or []),
+            )
+
+    rotated_dimensions: Optional[Tuple[int, int]] = None
+    if layout_type == "grid":
+        rotated_candidates = _audit_rotated_grid_dimensions(
+            config=config,
+            content=content,
+            content_type=content_type,
+            initial_result=initial_result,
+            additional_prompt=additional_prompt,
+        )
+        if rotated_candidates:
+            rotated_dimensions = (
+                max(rotated_rows for rotated_rows, _ in rotated_candidates),
+                max(rotated_cols for _, rotated_cols in rotated_candidates),
+            )
+            logger.info(
+                "Rotated audit aggregate candidates=%s -> max_rows=%s max_cols=%s",
+                rotated_candidates,
+                rotated_dimensions[0],
+                rotated_dimensions[1],
+            )
+
+    if not candidates:
+        if last_error is not None:
+            raise last_error
+        return initial_result
+
+    return _select_audit_candidate(
+        candidates=candidates,
+        rotated_dimensions=rotated_dimensions,
+        layout_type=layout_type,
+    )
+
+
+def _audit_rotated_grid_dimensions(
+    *,
+    config: VlmProviderConfigModel,
+    content: bytes,
+    content_type: str,
+    initial_result: Any,
+    additional_prompt: str = "",
+) -> List[Tuple[int, int]]:
+    try:
+        rotated_content = _rotate_image_90_cw(content, content_type=content_type)
+    except Exception as exc:
+        logger.warning("Image rotation failed for cross-orientation audit: %s", exc)
+        return []
+    rotated_initial = _swap_initial_result_dimensions(initial_result)
+    runs = _resolve_layout_audit_runs()
+    candidates: List[Tuple[int, int]] = []
+    for run_index in range(runs):
+        temperature = _layout_audit_temperature_for_run(run_index)
+        try:
+            candidate = _audit_box_template_layout_with_config(
+                config=config,
+                content_type=content_type,
+                content=rotated_content,
+                layout_type="grid",
+                initial_result=rotated_initial,
+                additional_prompt=additional_prompt,
+                temperature=temperature,
+            )
+        except vlm_client.VlmClientError as exc:
+            logger.warning(
+                "Rotated audit pass %s/%s failed status=%s message=%s",
+                run_index + 1,
+                runs,
+                exc.status_code,
+                exc.message,
+            )
+            continue
+        if not isinstance(candidate, dict):
+            continue
+        layout_def = candidate.get("layout_definition") or {}
+        rotated_rows = layout_def.get("rows")
+        rotated_cols = layout_def.get("cols")
+        if not isinstance(rotated_rows, int) or rotated_rows <= 0:
+            continue
+        if not isinstance(rotated_cols, int) or rotated_cols <= 0:
+            continue
+        swapped_rows = rotated_cols
+        swapped_cols = rotated_rows
+        logger.info(
+            "Rotated audit run %s/%s observed rotated_rows=%s rotated_cols=%s -> swapped rows=%s cols=%s temperature=%s",
+            run_index + 1,
+            runs,
+            rotated_rows,
+            rotated_cols,
+            swapped_rows,
+            swapped_cols,
+            temperature,
+        )
+        candidates.append((swapped_rows, swapped_cols))
+    return candidates
+
+
+def _rotate_image_90_cw(content: bytes, *, content_type: str) -> bytes:
+    with Image.open(BytesIO(content)) as image:
+        oriented = ImageOps.exif_transpose(image)
+        rotated = oriented.rotate(-90, expand=True)
+        save_format = _pil_format_for_content_type(content_type, fallback=image.format)
+        buffer = BytesIO()
+        rotated.save(buffer, format=save_format)
+        return buffer.getvalue()
+
+
+def _pil_format_for_content_type(content_type: str, *, fallback: Optional[str]) -> str:
+    normalized = (content_type or "").lower().strip()
+    if normalized == "image/jpeg" or normalized == "image/jpg":
+        return "JPEG"
+    if normalized == "image/png":
+        return "PNG"
+    if normalized == "image/webp":
+        return "WEBP"
+    if fallback:
+        return fallback
+    return "JPEG"
+
+
+def _swap_initial_result_dimensions(initial_result: Any) -> Any:
+    if not isinstance(initial_result, dict):
+        return initial_result
+    swapped = dict(initial_result)
+    layout_def = swapped.get("layout_definition")
+    if isinstance(layout_def, dict):
+        new_layout = dict(layout_def)
+        rows = new_layout.get("rows")
+        cols = new_layout.get("cols")
+        new_layout["rows"] = cols
+        new_layout["cols"] = rows
+        swapped["layout_definition"] = new_layout
+    swapped["cells"] = []
+    return swapped
+
+
+def _select_audit_candidate(
+    *,
+    candidates: List[Dict[str, Any]],
+    rotated_dimensions: Optional[Tuple[int, int]] = None,
+    layout_type: str,
+) -> Dict[str, Any]:
+    if not candidates:
+        return {}
+    if layout_type == "grid":
+        chosen = _pick_grid_audit_candidate(
+            candidates,
+            rotated_dimensions=rotated_dimensions,
+        )
+    else:
+        chosen = _pick_irregular_audit_candidate(candidates)
+    return chosen or candidates[-1]
+
+
+def _pick_grid_audit_candidate(
+    candidates: List[Dict[str, Any]],
+    *,
+    rotated_dimensions: Optional[Tuple[int, int]] = None,
+) -> Optional[Dict[str, Any]]:
+    rows_counter: Counter[int] = Counter()
+    cols_counter: Counter[int] = Counter()
+    for candidate in candidates:
+        layout_def = candidate.get("layout_definition") or {}
+        rows_value = layout_def.get("rows")
+        cols_value = layout_def.get("cols")
+        if isinstance(rows_value, int) and rows_value > 0:
+            rows_counter[rows_value] += 1
+        if isinstance(cols_value, int) and cols_value > 0:
+            cols_counter[cols_value] += 1
+    if not rows_counter or not cols_counter:
+        return None
+    voted_rows = _vote_with_undercount_bias(rows_counter)
+    voted_cols = _vote_with_undercount_bias(cols_counter)
+    final_rows = voted_rows
+    final_cols = voted_cols
+    if rotated_dimensions is not None:
+        rotated_rows, rotated_cols = rotated_dimensions
+        if voted_rows > voted_cols:
+            if rotated_rows > final_rows:
+                final_rows = rotated_rows
+        elif voted_cols > voted_rows:
+            if rotated_cols > final_cols:
+                final_cols = rotated_cols
+        else:
+            if rotated_rows > final_rows:
+                final_rows = rotated_rows
+            if rotated_cols > final_cols:
+                final_cols = rotated_cols
+    logger.info(
+        "Grid audit vote rows_mode=%s cols_mode=%s rotated=%s rows_dist=%s cols_dist=%s final_rows=%s final_cols=%s",
+        voted_rows,
+        voted_cols,
+        rotated_dimensions,
+        dict(rows_counter),
+        dict(cols_counter),
+        final_rows,
+        final_cols,
+    )
+    for candidate in candidates:
+        layout_def = candidate.get("layout_definition") or {}
+        if (
+            layout_def.get("rows") == final_rows
+            and layout_def.get("cols") == final_cols
+        ):
+            return _finalize_grid_audit_candidate(
+                _enforce_grid_cells_skeleton(candidate, final_rows, final_cols),
+                final_rows,
+                final_cols,
+            )
+    base_candidate = candidates[-1]
+    merged_candidate: Dict[str, Any] = dict(base_candidate)
+    cells_by_position = _merge_candidate_cells_by_position(candidates)
+    merged_candidate["cells"] = _build_grid_cells_skeleton(
+        final_rows,
+        final_cols,
+        cells_by_position,
+    )
+    return _finalize_grid_audit_candidate(merged_candidate, final_rows, final_cols)
+
+
+def _finalize_grid_audit_candidate(
+    candidate: Dict[str, Any],
+    rows: int,
+    cols: int,
+) -> Dict[str, Any]:
+    finalized = dict(candidate)
+    finalized["layout_definition"] = {"rows": rows, "cols": cols}
+    return finalized
+
+
+def _enforce_grid_cells_skeleton(
+    candidate: Dict[str, Any],
+    rows: int,
+    cols: int,
+) -> Dict[str, Any]:
+    raw_cells = candidate.get("cells")
+    cells_by_position: Dict[str, Dict[str, Any]] = {}
+    if isinstance(raw_cells, list):
+        for cell in raw_cells:
+            if isinstance(cell, dict):
+                position = cell.get("position_identifier")
+                if isinstance(position, str):
+                    cells_by_position[position] = cell
+    expected_positions = {
+        f"R{row}C{col}"
+        for row in range(1, rows + 1)
+        for col in range(1, cols + 1)
+    }
+    if set(cells_by_position.keys()) == expected_positions and isinstance(raw_cells, list) and len(raw_cells) == rows * cols:
+        return candidate
+    rebuilt = dict(candidate)
+    rebuilt["cells"] = _build_grid_cells_skeleton(rows, cols, cells_by_position)
+    return rebuilt
+
+
+def _build_grid_cells_skeleton(
+    rows: int,
+    cols: int,
+    cells_by_position: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    skeleton: List[Dict[str, Any]] = []
+    for row in range(1, rows + 1):
+        for col in range(1, cols + 1):
+            position = f"R{row}C{col}"
+            existing = cells_by_position.get(position)
+            if existing:
+                skeleton.append(existing)
+            else:
+                skeleton.append({"position_identifier": position, "is_empty": True})
+    return skeleton
+
+
+def _merge_candidate_cells_by_position(
+    candidates: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    for candidate in candidates:
+        raw_cells = candidate.get("cells")
+        if not isinstance(raw_cells, list):
+            continue
+        for cell in raw_cells:
+            if not isinstance(cell, dict):
+                continue
+            position = cell.get("position_identifier")
+            if not isinstance(position, str):
+                continue
+            existing = merged.get(position)
+            if existing is None:
+                merged[position] = cell
+                continue
+            if existing.get("is_empty") and not cell.get("is_empty"):
+                merged[position] = cell
+    return merged
+
+
+def _vote_with_undercount_bias(counter: Counter[int]) -> int:
+    most_common = counter.most_common()
+    top_count = most_common[0][1]
+    top_values = [value for value, count in most_common if count == top_count]
+    return max(top_values)
+
+
+def _pick_irregular_audit_candidate(
+    candidates: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    cells_counter: Counter[int] = Counter()
+    candidates_by_count: Dict[int, List[Dict[str, Any]]] = {}
+    for candidate in candidates:
+        cells = _extract_irregular_cells(candidate)
+        cells_count = len(cells)
+        if cells_count <= 0:
+            continue
+        cells_counter[cells_count] += 1
+        candidates_by_count.setdefault(cells_count, []).append(candidate)
+    if not cells_counter:
+        return None
+    voted_count = _vote_with_undercount_bias(cells_counter)
+    logger.info(
+        "Irregular audit vote cells_count=%s dist=%s",
+        voted_count,
+        dict(cells_counter),
+    )
+    return candidates_by_count[voted_count][0]
+
+
+def _extract_irregular_cells(candidate: Dict[str, Any]) -> List[Any]:
+    layout_def = candidate.get("layout_definition")
+    if isinstance(layout_def, dict):
+        cells = layout_def.get("cells")
+        if isinstance(cells, list) and cells:
+            return cells
+    cells = candidate.get("cells")
+    return cells if isinstance(cells, list) else []
 
 
 def _get_or_create_tag_ids(db: Session, *, tag_names: List[str]) -> List[int]:
@@ -1101,7 +1511,7 @@ def _run_recognition_session_with_db(
         )
         result_data = response.model_dump(mode="json")
         if recognition_session.mode == "auto_template_box":
-            result_data["parsed_result"] = _audit_box_template_layout_with_config(
+            result_data["parsed_result"] = _audit_box_template_layout_with_self_consistency(
                 config=config,
                 content_type=content_type,
                 content=content,
@@ -1533,7 +1943,7 @@ def recognize_box_layout_image(
         prompt=prompt,
         max_tokens=BOX_LAYOUT_RECOGNITION_MAX_TOKENS,
     )
-    response.parsed_result = _audit_box_template_layout_with_config(
+    response.parsed_result = _audit_box_template_layout_with_self_consistency(
         config=config,
         content_type=content_type,
         content=normalized_content,

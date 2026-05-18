@@ -78,6 +78,7 @@ def request_chat_completion(
     config: VlmProviderConfig,
     messages: List[Dict[str, Any]],
     max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
 ) -> Tuple[Dict[str, Any], int]:
     if not config.is_active:
         raise VlmClientError("VLM config is disabled")
@@ -87,10 +88,15 @@ def request_chat_completion(
     extra_config = config.extra_config or {}
     timeout_seconds = float(extra_config.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
     request_max_tokens = max_tokens or int(extra_config.get("max_tokens", 800))
+    request_temperature = (
+        float(temperature)
+        if temperature is not None
+        else float(extra_config.get("temperature", 0))
+    )
     payload: Dict[str, Any] = {
         "model": config.model_name,
         "messages": messages,
-        "temperature": extra_config.get("temperature", 0),
+        "temperature": request_temperature,
         "max_tokens": request_max_tokens,
     }
 
@@ -103,11 +109,12 @@ def request_chat_completion(
         headers["Authorization"] = f"Bearer {config.api_key}"
 
     logger.info(
-        "VLM request started provider=%s model=%s timeout_seconds=%s max_tokens=%s",
+        "VLM request started provider=%s model=%s timeout_seconds=%s max_tokens=%s temperature=%s",
         config.provider,
         config.model_name,
         timeout_seconds,
         request_max_tokens,
+        request_temperature,
     )
     started_at = perf_counter()
     try:
