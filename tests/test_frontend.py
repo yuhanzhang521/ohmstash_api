@@ -836,16 +836,18 @@ def test_clear_database_sends_database_name() -> None:
                 return defaultValue;
             };
             showToast = () => {};
-            state.serverConfig = {database_name: "ohmstash"};
+            state.serverConfig = null;
             state.authToken = "token";
             state.recognitionSessions = [];
-            const originalApiRequest = apiRequest;
             apiRequest = async (path, options = {}) => {
                 requests.push({
                     path,
                     method: options.method || "GET",
                     body: options.body || null,
                 });
+                if (path === "/system/config") {
+                    return {database_name: "ohmstash"};
+                }
                 if (path === "/system/database") {
                     return {
                         deleted_boxes: 1,
@@ -854,13 +856,14 @@ def test_clear_database_sends_database_name() -> None:
                         deleted_templates: 0,
                     };
                 }
-                return originalApiRequest(path, options);
+                return {};
             };
             refreshAll = async () => {};
             await clearDatabase();
             return {
                 prompts,
                 requests,
+                databaseName: state.serverConfig && state.serverConfig.database_name,
             };
         })()
         """
@@ -868,6 +871,8 @@ def test_clear_database_sends_database_name() -> None:
 
     assert any("CLEAR DATABASE" in prompt for prompt in result["prompts"])
     assert any("ohmstash" in prompt for prompt in result["prompts"])
+    assert result["databaseName"] == "ohmstash"
+    assert any(item["path"] == "/system/config" for item in result["requests"])
     database_request = next(
         item for item in result["requests"] if item["path"] == "/system/database"
     )

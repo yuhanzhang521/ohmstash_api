@@ -69,6 +69,25 @@ def get_base_url(config: VlmProviderConfig) -> str:
     raise VlmClientError("VLM base_url is required for this provider")
 
 
+def resolve_timeout_seconds(extra_config: Optional[Dict[str, Any]] = None) -> float:
+    """Return request timeout; never below DEFAULT (layout vision often exceeds 90s)."""
+    raw_value = (extra_config or {}).get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+    try:
+        timeout_seconds = float(raw_value)
+    except (TypeError, ValueError):
+        return DEFAULT_TIMEOUT_SECONDS
+    if timeout_seconds <= 0:
+        return DEFAULT_TIMEOUT_SECONDS
+    if timeout_seconds < DEFAULT_TIMEOUT_SECONDS:
+        logger.info(
+            "Raising VLM timeout_seconds from %s to default %s",
+            timeout_seconds,
+            DEFAULT_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_TIMEOUT_SECONDS
+    return timeout_seconds
+
+
 def build_image_data_url(content: bytes, content_type: str) -> str:
     encoded_content = base64.b64encode(content).decode("ascii")
     return f"data:{content_type};base64,{encoded_content}"
@@ -87,7 +106,7 @@ def request_chat_completion(
         raise VlmClientError("VLM model_name is required")
 
     extra_config = config.extra_config or {}
-    timeout_seconds = float(extra_config.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+    timeout_seconds = resolve_timeout_seconds(extra_config)
     request_max_tokens = max_tokens or int(extra_config.get("max_tokens", 800))
     request_temperature = (
         float(temperature)
@@ -119,12 +138,29 @@ def request_chat_completion(
     )
     started_at = perf_counter()
     try:
-        with httpx.Client(timeout=timeout_seconds) as client:
+        # Separate connect/read so slow model generation is not treated as connect hang.
+        timeout = httpx.Timeout(
+            timeout_seconds,
+            connect=min(30.0, timeout_seconds),
+        )
+        with httpx.Client(timeout=timeout) as client:
             response = client.post(
                 f"{get_base_url(config)}/chat/completions",
                 headers=headers,
                 json=payload,
             )
+    except httpx.TimeoutException as exc:
+        logger.warning(
+            "VLM request timed out provider=%s timeout_seconds=%s error=%s",
+            config.provider,
+            timeout_seconds,
+            exc,
+        )
+        raise VlmClientError(
+            f"VLM request timed out after {timeout_seconds:.0f}s "
+            f"(layout recognition often needs 2-6 minutes; check provider latency "
+            f"or raise timeout_seconds in VLM config)"
+        ) from exc
     except httpx.RequestError as exc:
         logger.warning("VLM request failed provider=%s error=%s", config.provider, exc)
         raise VlmClientError(f"VLM request failed: {exc}") from exc

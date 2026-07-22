@@ -1486,7 +1486,8 @@ function fillVlmForm(config) {
     q("#vlm-base-url").value = config?.base_url || "";
     q("#vlm-model-name").value = config?.model_name || "";
     q("#vlm-api-key").value = "";
-    q("#vlm-timeout-seconds").value = config?.extra_config?.timeout_seconds || 90;
+    q("#vlm-timeout-seconds").value = config?.extra_config?.timeout_seconds
+        || DEFAULT_VLM_TIMEOUT_SECONDS;
     q("#vlm-active").checked = config?.is_active ?? true;
     q("#vlm-submit-button").textContent = config ? "保存修改" : "保存供应商";
 }
@@ -1494,7 +1495,9 @@ function fillVlmForm(config) {
 function buildVlmConfigPayload() {
     const existingConfig = state.vlmConfigs.find((config) => config.id === state.editingVlmConfigId);
     const extraConfig = {...(existingConfig?.extra_config || {})};
-    extraConfig.timeout_seconds = Number(q("#vlm-timeout-seconds").value || 90);
+    extraConfig.timeout_seconds = Number(
+        q("#vlm-timeout-seconds").value || DEFAULT_VLM_TIMEOUT_SECONDS,
+    );
     const payload = {
         name: q("#vlm-name").value.trim(),
         provider: q("#vlm-provider").value,
@@ -5035,17 +5038,19 @@ async function clearDatabase() {
     if (!firstConfirm) {
         return;
     }
+    // Fetch live config so clear always uses the running backend's database_name.
+    const serverConfig = await apiRequest("/system/config");
+    state.serverConfig = serverConfig;
+    const databaseName = serverConfig?.database_name;
+    if (!databaseName) {
+        throw new Error(
+            "无法获取当前数据库名称。请刷新页面后重试；若仍失败，请确认后端已更新并重启。",
+        );
+    }
     const confirmation = window.prompt("请输入 CLEAR DATABASE 以确认清空数据库。");
     if (confirmation !== "CLEAR DATABASE") {
         showToast("清空数据库已取消");
         return;
-    }
-    if (!state.serverConfig?.database_name) {
-        await refreshServerConfig();
-    }
-    const databaseName = state.serverConfig?.database_name;
-    if (!databaseName) {
-        throw new Error("无法获取当前数据库名称，请刷新后重试");
     }
     const typedDatabaseName = window.prompt(
         `请再次输入当前数据库名称以确认：\n${databaseName}`,
