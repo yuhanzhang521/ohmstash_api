@@ -14,7 +14,8 @@ from app.core.log_sanitizer import redact_sensitive_text
 from app.models.vlm_provider_config import VlmProviderConfig
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_TIMEOUT_SECONDS = 90.0
+# Layout/content vision calls commonly take 2-5 minutes on remote VLM gateways.
+DEFAULT_TIMEOUT_SECONDS = 360.0
 
 logger = logging.getLogger(__name__)
 

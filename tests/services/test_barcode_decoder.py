@@ -4,7 +4,7 @@ from app.services import barcode_decoder
 
 
 def test_decode_data_matrix_from_phone_photo() -> None:
-    image_path = Path("tests/dm_test.jpg")
+    image_path = Path("tests/barcode_box_labels.jpg")
     raw_codes = barcode_decoder.decode_barcodes_from_image(image_path.read_bytes())
 
     assert raw_codes == ["DataMatrix Content Is Here!"]

@@ -116,8 +116,8 @@ def _assert_grid_layout_result(
     assert cells[-1]["position_identifier"] == f"R{rows}C{cols}"
 
 
-def _assert_3x13_result_preserves_recognition_content(parsed_result: dict[str, Any]) -> None:
-    _assert_grid_layout_result(parsed_result, rows=13, cols=3)
+def _assert_4x13_result_preserves_recognition_content(parsed_result: dict[str, Any]) -> None:
+    _assert_grid_layout_result(parsed_result, rows=13, cols=4)
     cells = parsed_result["cells"]
 
     content_cells = [cell for cell in cells if cell.get("name")]
@@ -903,12 +903,12 @@ def test_recognize_box_layout_image_returns_template_definition(
     assert content["parsed_result"]["layout_type"] == "irregular"
 
 
-def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
+def test_recognize_grid_layout_prompt_counts_flat_4x13_grid(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
-    cells = _grid_cells(rows=13, cols=3)
+    image_path = TEST_DATA_DIR / "example_pictures" / "grid_4x13_mixed_modules.jpg"
+    cells = _grid_cells(rows=13, cols=4)
 
     def fake_request_chat_completion(**kwargs: Any) -> tuple[dict[str, Any], int]:
         prompt = kwargs["messages"][0]["content"][0]["text"]
@@ -924,9 +924,9 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
                             "message": {
                                 "content": json.dumps(
                                     {
-                                        "template_name": "3x13格",
+                                        "template_name": "4x13格",
                                         "layout_type": "grid",
-                                        "layout_definition": {"rows": 13, "cols": 3},
+                                        "layout_definition": {"rows": 13, "cols": 4},
                                         "cells": cells,
                                     },
                                     ensure_ascii=False,
@@ -948,9 +948,9 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
                         "message": {
                             "content": json.dumps(
                                 {
-                                    "template_name": "3x13格",
+                                    "template_name": "4x13格",
                                     "layout_type": "grid",
-                                    "layout_definition": {"rows": 13, "cols": 3},
+                                    "layout_definition": {"rows": 13, "cols": 4},
                                     "cells": cells,
                                 },
                                 ensure_ascii=False,
@@ -989,15 +989,15 @@ def test_recognize_grid_layout_prompt_counts_flat_3x13_grid(
     content = response.json()
     layout_definition = content["parsed_result"]["layout_definition"]
     assert layout_definition["rows"] == 13
-    assert layout_definition["cols"] == 3
-    assert len(content["parsed_result"]["cells"]) == 39
+    assert layout_definition["cols"] == 4
+    assert len(content["parsed_result"]["cells"]) == 52
 
 def test_auto_template_session_keeps_vlm_grid_layout_without_local_override(
     client: TestClient,
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
+    image_path = TEST_DATA_DIR / "example_pictures" / "grid_4x13_mixed_modules.jpg"
     prompts: list[str] = []
 
     result_payload = {
@@ -1115,12 +1115,12 @@ def test_auto_template_session_clears_empty_cell_payload(
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
+    image_path = TEST_DATA_DIR / "example_pictures" / "grid_4x13_mixed_modules.jpg"
 
     result_payload = {
-        "template_name": "3x13格",
+        "template_name": "4x13格",
         "layout_type": "grid",
-        "layout_definition": {"rows": 13, "cols": 3},
+        "layout_definition": {"rows": 13, "cols": 4},
         "box_name": "模块",
         "cells": [
             {
@@ -1209,7 +1209,7 @@ def test_auto_template_session_keeps_vlm_grid_layout_for_five_runs(
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    image_path = TEST_DATA_DIR / "recognition_3x13_grid.jpg"
+    image_path = TEST_DATA_DIR / "example_pictures" / "grid_4x13_mixed_modules.jpg"
 
     result_payload = {
         "template_name": "3x12格",
@@ -1307,13 +1307,18 @@ def _real_vlm_stability_runs() -> int:
 
 
 REAL_VLM_LAYOUT_CASES = [
-    ("recognition_irregular_2x5_plus_2x2.jpg", "irregular", None, None, 14),
-    ("recognition_irregular_2x5_plus_2x2_v2.jpg", "irregular", None, None, 14),
-    ("recognition_grid_4x7_original.jpg", "grid", 7, 4, 28),
-    ("recognition_grid_8x7_original.jpg", "grid", 7, 8, 56),
-    ("recognition_3x13_grid.jpg", "grid", 13, 3, 39),
-    ("recognition_3x13_grid_original.jpg", "grid", 13, 3, 39),
-    ("recognition_3x11_grid.jpg", "grid", 11, 3, 33),
+    ("example_pictures/irregular_14_screws.jpg", "irregular", None, None, 14),
+    ("example_pictures/irregular_14_esp32_connectors.jpg", "irregular", None, None, 14),
+    ("example_pictures/irregular_14_headers.jpg", "irregular", None, None, 14),
+    ("example_pictures/irregular_14_fpc_adapters.jpg", "irregular", None, None, 14),
+    ("example_pictures/grid_4x7_power_ics.jpg", "grid", 7, 4, 28),
+    ("example_pictures/grid_4x7_power_ics_v2.jpg", "grid", 7, 4, 28),
+    ("example_pictures/grid_4x7_diodes_leds.jpg", "grid", 7, 4, 28),
+    ("example_pictures/grid_8x7_smd_caps.jpg", "grid", 7, 8, 56),
+    ("example_pictures/grid_8x7_smd_caps_v2.jpg", "grid", 7, 8, 56),
+    ("example_pictures/grid_4x13_mixed_modules.jpg", "grid", 13, 4, 52),
+    ("example_pictures/grid_3x11_sensor_modules.jpg", "grid", 11, 3, 33),
+    ("example_pictures/grid_3x11_sensor_modules_v2.jpg", "grid", 11, 3, 33),
 ]
 
 

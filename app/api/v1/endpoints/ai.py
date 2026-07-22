@@ -356,6 +356,7 @@ def _audit_box_template_layout_with_self_consistency(
         candidates=standard_candidates,
         rotated_dimensions=rotated_dimensions,
         layout_type=layout_type,
+        initial_result=initial_result,
     )
 
 
@@ -403,27 +404,75 @@ def _select_audit_candidate(
     candidates: List[Dict[str, Any]],
     rotated_dimensions: Optional[Tuple[int, int]] = None,
     layout_type: str,
+    initial_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if not candidates:
-        return {}
+        return initial_result or {}
     if layout_type == "grid":
         chosen = _pick_grid_audit_candidate(
             candidates,
             rotated_dimensions=rotated_dimensions,
+            initial_result=initial_result,
         )
     else:
         chosen = _pick_irregular_audit_candidate(candidates)
     return chosen or candidates[-1]
 
 
+def _extract_grid_dimensions(
+    parsed_result: Optional[Dict[str, Any]],
+) -> Optional[Tuple[int, int]]:
+    if not isinstance(parsed_result, dict):
+        return None
+    layout_def = parsed_result.get("layout_definition") or {}
+    rows_value = layout_def.get("rows")
+    cols_value = layout_def.get("cols")
+    if not isinstance(rows_value, int) or rows_value <= 0:
+        return None
+    if not isinstance(cols_value, int) or cols_value <= 0:
+        return None
+    return rows_value, cols_value
+
+
+def _grid_result_has_full_skeleton(
+    parsed_result: Optional[Dict[str, Any]],
+    *,
+    rows: int,
+    cols: int,
+) -> bool:
+    if not isinstance(parsed_result, dict):
+        return False
+    raw_cells = parsed_result.get("cells")
+    if not isinstance(raw_cells, list) or len(raw_cells) != rows * cols:
+        return False
+    positions = {
+        cell.get("position_identifier")
+        for cell in raw_cells
+        if isinstance(cell, dict)
+    }
+    expected = {
+        f"R{row}C{col}"
+        for row in range(1, rows + 1)
+        for col in range(1, cols + 1)
+    }
+    return positions == expected
+
+
 def _pick_grid_audit_candidate(
     candidates: List[Dict[str, Any]],
     *,
     rotated_dimensions: Optional[Tuple[int, int]] = None,
+    initial_result: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
+    # Seed with the first-pass result so a single noisy audit cannot override it.
+    vote_pool: List[Dict[str, Any]] = list(candidates)
+    initial_dims = _extract_grid_dimensions(initial_result)
+    if initial_dims is not None:
+        vote_pool.append(initial_result)
+
     rows_counter: Counter[int] = Counter()
     cols_counter: Counter[int] = Counter()
-    for candidate in candidates:
+    for candidate in vote_pool:
         layout_def = candidate.get("layout_definition") or {}
         rows_value = layout_def.get("rows")
         cols_value = layout_def.get("cols")
@@ -433,23 +482,59 @@ def _pick_grid_audit_candidate(
             cols_counter[cols_value] += 1
     if not rows_counter or not cols_counter:
         return None
-    voted_rows = _vote_with_undercount_bias(rows_counter)
-    voted_cols = _vote_with_undercount_bias(cols_counter)
+
+    voted_rows = _vote_majority_prefer_smaller(rows_counter)
+    voted_cols = _vote_majority_prefer_smaller(cols_counter)
     final_rows = voted_rows
     final_cols = voted_cols
+
+    # Rotated views only corroborate; they must not invent a larger grid alone.
     if rotated_dimensions is not None:
         rotated_rows, rotated_cols = rotated_dimensions
-        if voted_rows > voted_cols:
-            if rotated_rows > final_rows:
-                final_rows = rotated_rows
-        elif voted_cols > voted_rows:
-            if rotated_cols > final_cols:
-                final_cols = rotated_cols
+        if rotated_rows == voted_rows and rotated_cols == voted_cols:
+            pass
+        elif (
+            initial_dims is not None
+            and rotated_rows == initial_dims[0]
+            and rotated_cols == initial_dims[1]
+        ):
+            final_rows, final_cols = initial_dims
         else:
-            if rotated_rows > final_rows:
-                final_rows = rotated_rows
-            if rotated_cols > final_cols:
-                final_cols = rotated_cols
+            logger.info(
+                "Ignoring rotated audit dimensions=%s that disagree with vote=(%s,%s)",
+                rotated_dimensions,
+                voted_rows,
+                voted_cols,
+            )
+
+    # Prefer a well-formed initial over a single-run audit that only adds +1
+    # on one axis (common outer-frame / empty-tray overcount). Only apply when
+    # the larger count does not strictly outvote the initial on that axis.
+    if initial_dims is not None:
+        init_rows, init_cols = initial_dims
+        initial_complete = _grid_result_has_full_skeleton(
+            initial_result,
+            rows=init_rows,
+            cols=init_cols,
+        )
+        if initial_complete and (final_rows, final_cols) != (init_rows, init_cols):
+            rows_over_by_one = final_rows == init_rows + 1 and final_cols == init_cols
+            cols_over_by_one = final_rows == init_rows and final_cols == init_cols + 1
+            if rows_over_by_one and rows_counter[final_rows] <= rows_counter[init_rows]:
+                logger.info(
+                    "Keeping initial rows=%s over audited rows=%s (no majority for +1 overcount)",
+                    init_rows,
+                    final_rows,
+                )
+                final_rows = init_rows
+            if cols_over_by_one and cols_counter[final_cols] <= cols_counter[init_cols]:
+                logger.info(
+                    "Keeping initial cols=%s over audited cols=%s (no majority for +1 overcount)",
+                    init_cols,
+                    final_cols,
+                )
+                final_cols = init_cols
+
     logger.info(
         "Grid audit vote rows_mode=%s cols_mode=%s rotated=%s rows_dist=%s cols_dist=%s final_rows=%s final_cols=%s",
         voted_rows,
@@ -460,7 +545,9 @@ def _pick_grid_audit_candidate(
         final_rows,
         final_cols,
     )
-    for candidate in candidates:
+
+    source_candidates = vote_pool
+    for candidate in source_candidates:
         layout_def = candidate.get("layout_definition") or {}
         if (
             layout_def.get("rows") == final_rows
@@ -471,9 +558,9 @@ def _pick_grid_audit_candidate(
                 final_rows,
                 final_cols,
             )
-    base_candidate = candidates[-1]
+    base_candidate = source_candidates[-1]
     merged_candidate: Dict[str, Any] = dict(base_candidate)
-    cells_by_position = _merge_candidate_cells_by_position(candidates)
+    cells_by_position = _merge_candidate_cells_by_position(source_candidates)
     merged_candidate["cells"] = _build_grid_cells_skeleton(
         final_rows,
         final_cols,
@@ -558,10 +645,19 @@ def _merge_candidate_cells_by_position(
 
 
 def _vote_with_undercount_bias(counter: Counter[int]) -> int:
+    """Legacy helper kept for tests; prefer majority then larger value."""
     most_common = counter.most_common()
     top_count = most_common[0][1]
     top_values = [value for value, count in most_common if count == top_count]
     return max(top_values)
+
+
+def _vote_majority_prefer_smaller(counter: Counter[int]) -> int:
+    """Majority vote; on a pure tie prefer the smaller count to resist outer-frame overcount."""
+    most_common = counter.most_common()
+    top_count = most_common[0][1]
+    top_values = [value for value, count in most_common if count == top_count]
+    return min(top_values)
 
 
 def _pick_irregular_audit_candidate(

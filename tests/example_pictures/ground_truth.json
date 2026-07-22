@@ -1,0 +1,784 @@
+{
+  "_schema_notes": {
+    "rows_cols_convention": "layout_definition uses rows (vertical count) and cols (horizontal count). template_name for grid is '{cols}x{rows}格' (cols first).",
+    "position_identifier_grid": "R{row}C{col}, row-major, 1-based, top-left is R1C1.",
+    "position_identifier_irregular": "Column-major letter+number: A1,A2,... then B1,B2,...",
+    "orientation": "landscape = long side horizontal; portrait = long side vertical.",
+    "cell_count": "Number of independent physical sub-boxes (not rows*cols for irregular LCM grids).",
+    "content_labels": "Top-to-bottom within each column/row as seen in the photo; empty = no label or empty tray."
+  },
+  "images": {
+    "barcode_box_labels.jpg": {
+      "kind": "barcode_label",
+      "description": "Printed BOX labels on green surface; used for DataMatrix/QR barcode decode tests, not layout recognition.",
+      "notes": [
+        "Upper label: BOX-0001 / 盒1 / 4x7贴片盒",
+        "Lower label: BOX-0001 / 螺丝收纳盒1 / 2x5+4收纳盒"
+      ]
+    },
+    "grid_4x7_power_ics.jpg": {
+      "kind": "box_layout",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 4,
+      "cell_count": 28,
+      "template_name": "4x7格",
+      "orientation_in_photo": "portrait_box",
+      "subject": "Power ICs / regulators / sensors in black tape",
+      "aliases": [
+        "recognition_grid_4x7_original.jpg"
+      ],
+      "content_by_position": {
+        "R1C1": "AMS1117 1.2V",
+        "R1C2": "AMS1117 1.8V",
+        "R1C3": "AMS1117 2.5V",
+        "R1C4": "AMS1117 3.3V",
+        "R2C1": "78M05 5V1A LDO",
+        "R2C2": "78M12 12V1A LDO",
+        "R2C3": "ME6211 C33M5G-N LDO",
+        "R2C4": "RY8411 42V1.2A 800kHz",
+        "R3C1": "TPS5450 36V5A 500kHz",
+        "R3C2": "MP2456 50V0.5A 1.2MHz",
+        "R3C3": "TPS54302 28V3A 400kHz",
+        "R3C4": "TPS5430 36V3A 500kHz",
+        "R4C1": "IP5306 2.1A 电源SOC",
+        "R4C2": "TPS61022-RWUR VQFN-7",
+        "R4C3": "TP4056 1A 线性充电",
+        "R4C4": "TP5000 2A开关型充电芯片",
+        "R5C1": "EA3059 DC-DC 电源芯片",
+        "R5C2": "empty",
+        "R5C3": "empty",
+        "R5C4": "empty",
+        "R6C1": "MSM261S 4030H0R I2S硅麦",
+        "R6C2": "MAX98357A ETE/WL+T I2S放大器",
+        "R6C3": "BQ24195 RGER",
+        "R6C4": "LIS3DHTR 加速度计",
+        "R7C1": "BMP280",
+        "R7C2": "AHT20",
+        "R7C3": "INA226 0~36V",
+        "R7C4": "MPU6050"
+      },
+      "ocr_hard_cases": [
+        "R3C1 label often misread as IPS5450 instead of TPS5450",
+        "R3C4 label often misread as IPS5430 instead of TPS5430",
+        "R6C3 BQ24195 + RGER suffix is one IC model (package-code style), not separate packaging note"
+      ]
+    },
+    "grid_4x7_power_ics_v2.jpg": {
+      "kind": "box_layout",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 4,
+      "cell_count": 28,
+      "template_name": "4x7格",
+      "orientation_in_photo": "portrait_box",
+      "subject": "Same power-IC box as grid_4x7_power_ics.jpg, different lighting/angle (robustness)",
+      "aliases": [
+        "IMG_2036.JPG"
+      ],
+      "same_layout_as": "grid_4x7_power_ics.jpg",
+      "content_by_position": {
+        "R1C1": "AMS1117 1.2V",
+        "R1C2": "AMS1117 1.8V",
+        "R1C3": "AMS1117 2.5V",
+        "R1C4": "AMS1117 3.3V",
+        "R2C1": "78M05 5V1A LDO",
+        "R2C2": "78M12 12V1A LDO",
+        "R2C3": "ME6211 C33M5G-N LDO",
+        "R2C4": "RY8411 42V1.2A 800kHz",
+        "R3C1": "TPS5450 36V5A 500kHz",
+        "R3C2": "MP2456 50V0.5A 1.2MHz",
+        "R3C3": "TPS54302 28V3A 400kHz",
+        "R3C4": "TPS5430 36V3A 500kHz",
+        "R4C1": "IP5306 2.1A 电源SOC",
+        "R4C2": "TPS61022-RWUR VQFN-7",
+        "R4C3": "TP4056 1A 线性充电",
+        "R4C4": "TP5000 2A开关型充电芯片",
+        "R5C1": "EA3059 DC-DC 电源芯片",
+        "R5C2": "empty",
+        "R5C3": "empty",
+        "R5C4": "empty",
+        "R6C1": "MSM261S 4030H0R I2S硅麦",
+        "R6C2": "MAX98357A ETE/WL+T I2S放大器",
+        "R6C3": "BQ24195 RGER",
+        "R6C4": "LIS3DHTR 加速度计",
+        "R7C1": "BMP280",
+        "R7C2": "AHT20",
+        "R7C3": "INA226 0~36V",
+        "R7C4": "MPU6050"
+      }
+    },
+    "grid_4x7_diodes_leds.jpg": {
+      "kind": "box_layout",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 4,
+      "cell_count": 28,
+      "template_name": "4x7格",
+      "orientation_in_photo": "portrait_box",
+      "subject": "Diodes, MOSFETs, LEDs, addressable LED",
+      "aliases": [
+        "IMG_2035.JPG"
+      ],
+      "content_by_position": {
+        "R1C1": "SMF36A TVS",
+        "R1C2": "SMCJ18CA 双向TVS",
+        "R1C3": "SS24 肖特基二极管",
+        "R1C4": "1N5819WS 0.58V@1A 肖特基二极管",
+        "R2C1": "1N4007W A7 SOD-123",
+        "R2C2": "S8050 印J3Y SOT23",
+        "R2C3": "AO3400 30V 5.8A NMOS",
+        "R2C4": "AO3401 PMOS",
+        "R3C1": "B340A SMA 肖特基",
+        "R3C2": "BZT52C3V3S SOD323 稳压二极管",
+        "R3C3": "AOD4184L 40V NMOS",
+        "R3C4": "ESDA6V1W5 SOT353 TVS",
+        "R4C1": "LMUN2233LT1G 50V0.1A 预偏置NPN",
+        "R4C2": "1N4148 小信号开关二极管",
+        "R4C3": "CD4148WIP 开关二极管",
+        "R4C4": "empty",
+        "R5C1": "0603 LED 蓝色",
+        "R5C2": "0603 LED 红色",
+        "R5C3": "0603 LED 白色",
+        "R5C4": "0603 LED 橙色",
+        "R6C1": "0603 LED 翠绿",
+        "R6C2": "0603 LED 暖白",
+        "R6C3": "0603 LED 黄绿色",
+        "R6C4": "WS2812B 2020 淘宝装",
+        "R7C1": "WS2812B 立创商城",
+        "R7C2": "empty",
+        "R7C3": "empty",
+        "R7C4": "empty"
+      }
+    },
+    "grid_8x7_smd_caps.jpg": {
+      "kind": "box_layout",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 8,
+      "cell_count": 56,
+      "template_name": "8x7格",
+      "orientation_in_photo": "landscape_box",
+      "subject": "SMD capacitors (0402/0603/0805) with package+value labels",
+      "aliases": [
+        "recognition_grid_8x7_original.jpg"
+      ],
+      "notes": [
+        "Count physical divider lines, not labeled trays: many empty cells with no white label.",
+        "Top-left block of empties and mid-right empties must still be counted as cells."
+      ],
+      "content_by_position": {
+        "R1C1": "0603 75pF 50V 10%",
+        "R1C2": "empty",
+        "R1C3": "empty",
+        "R1C4": "empty",
+        "R1C5": "0805 10uF 50V",
+        "R1C6": "0603 22uF 6.3V 20%",
+        "R1C7": "0402 4.7uF 10V 10%",
+        "R1C8": "0402 2.2uF 10V 10%",
+        "R2C1": "0603 12pF 50V",
+        "R2C2": "0603 20pF",
+        "R2C3": "0402 20pF",
+        "R2C4": "0402 33pF 50V 5%",
+        "R2C5": "0603 10nF 50V 10%",
+        "R2C6": "0402 10nF 50V 10%",
+        "R2C7": "0603 470nF 25V 20%",
+        "R2C8": "0603 680nF 25V 20%",
+        "R3C1": "0402 15pF 50V 5%",
+        "R3C2": "0603 22pF 50V 5%",
+        "R3C3": "0402 47pF 50V 5%",
+        "R3C4": "0603 30pF 50V 5%",
+        "R3C5": "0603 10nF",
+        "R3C6": "0603 100nF 50V 10%",
+        "R3C7": "empty",
+        "R3C8": "0402 100nF 50V",
+        "R4C1": "0402 8.2pF 50V 0.5%",
+        "R4C2": "0603 6pF 50V 0.5%",
+        "R4C3": "0603 10pF 50V 5%",
+        "R4C4": "0402 391pF 50V 10%",
+        "R4C5": "0402 33nF 50V 10%",
+        "R4C6": "0402 22nF 50V 10%",
+        "R4C7": "0402 2.2nF 50V 10%",
+        "R4C8": "0402 4.7nF 50V 10%",
+        "R5C1": "0402 15pF 50V 0.25%",
+        "R5C2": "0402 12pF 50V 5%",
+        "R5C3": "0402 18pF 50V 5%",
+        "R5C4": "0402 6pF 50V",
+        "R5C5": "0603 5.6nF 50V 10%",
+        "R5C6": "0603 12nF 50V 10%",
+        "R5C7": "0603 1nF 50V 10%",
+        "R5C8": "0603 47nF 50V 10%",
+        "R6C1": "0603 3.9pF 50V 0.25%",
+        "R6C2": "0402 4.7pF 50V 0.25%",
+        "R6C3": "0402 10pF 50V 5%",
+        "R6C4": "0402 27pF 50V 5%",
+        "R6C5": "0603 101pF 50V 5%",
+        "R6C6": "0603 471pF 50V 10%",
+        "R6C7": "0402 150pF 50V 10%",
+        "R6C8": "0402 221pF 50V 10%",
+        "R7C1": "0402 2.2pF 50V 0.25%",
+        "R7C2": "0402 1.2pF 50V 0.25%",
+        "R7C3": "0402 1pF 50V 0.25%",
+        "R7C4": "0402 3.9pF 50V 0.25%",
+        "R7C5": "0402 101pF 50V 5%",
+        "R7C6": "0603 221pF 50V 10%",
+        "R7C7": "0402 22pF 50V 5%",
+        "R7C8": "0402 12pF 50V 5%"
+      }
+    },
+    "grid_8x7_smd_caps_v2.jpg": {
+      "kind": "box_layout",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 8,
+      "cell_count": 56,
+      "template_name": "8x7格",
+      "orientation_in_photo": "landscape_box",
+      "subject": "Same SMD capacitor box as grid_8x7_smd_caps.jpg, handheld robustness shot",
+      "aliases": [
+        "IMG_2037.JPG"
+      ],
+      "same_layout_as": "grid_8x7_smd_caps.jpg"
+    },
+    "grid_3x11_sensor_modules.jpg": {
+      "kind": "box_layout",
+      "layout_type": "grid",
+      "rows": 11,
+      "cols": 3,
+      "cell_count": 33,
+      "template_name": "3x11格",
+      "orientation_in_photo": "portrait_box",
+      "subject": "Sensor / camera / audio modules in nested small boxes",
+      "aliases": [
+        "recognition_3x11_grid.jpg"
+      ],
+      "notes": [
+        "Many empty transparent trays; count divider lines, not labeled boxes only.",
+        "Right column has longer empty stretches between labeled cells."
+      ],
+      "content_by_position": {
+        "R1C1": "AHT30 模块",
+        "R1C2": "BMP180模块",
+        "R1C3": "empty",
+        "R2C1": "SGP30模块 TVOC&eCO2",
+        "R2C2": "ZP16 传感器模块",
+        "R2C3": "SGP41模块 3.3~5V",
+        "R3C1": "OV3660摄像头 小/大模组",
+        "R3C2": "MLX90640 热成像模块",
+        "R3C3": "OV7670",
+        "R4C1": "INMP441 麦克风模块",
+        "R4C2": "LM393/max9814 麦克风模块",
+        "R4C3": "DHT11模块",
+        "R5C1": "MAX98357 模块",
+        "R5C2": "empty",
+        "R5C3": "empty",
+        "R6C1": "震动马达模块 3~5.3V",
+        "R6C2": "empty",
+        "R6C3": "empty",
+        "R7C1": "5V激光头",
+        "R7C2": "empty",
+        "R7C3": "empty",
+        "R8C1": "empty",
+        "R8C2": "empty",
+        "R8C3": "empty",
+        "R9C1": "VL53L0X V2 激光测距模块",
+        "R9C2": "HC-SR04 超声波模块",
+        "R9C3": "超声波换能器 16mm",
+        "R10C1": "empty",
+        "R10C2": "empty",
+        "R10C3": "empty",
+        "R11C1": "MPU6050 模块",
+        "R11C2": "LIS3DH 传感器模块",
+        "R11C3": "ESP32-C6 N4 开发板"
+      }
+    },
+    "grid_3x11_sensor_modules_v2.jpg": {
+      "kind": "box_layout",
+      "layout_type": "grid",
+      "rows": 11,
+      "cols": 3,
+      "cell_count": 33,
+      "template_name": "3x11格",
+      "orientation_in_photo": "portrait_box",
+      "subject": "Same sensor-module box as grid_3x11_sensor_modules.jpg, different angle",
+      "aliases": [
+        "IMG_2040.JPG"
+      ],
+      "same_layout_as": "grid_3x11_sensor_modules.jpg"
+    },
+    "grid_4x13_mixed_modules.jpg": {
+      "kind": "box_layout",
+      "layout_type": "grid",
+      "rows": 13,
+      "cols": 4,
+      "cell_count": 52,
+      "template_name": "4x13格",
+      "orientation_in_photo": "portrait_box",
+      "subject": "Mixed modules, fans, connectors; right two columns mostly empty nested trays",
+      "aliases": [
+        "grid_3x13_mixed_modules.jpg",
+        "recognition_3x13_grid_original.jpg",
+        "recognition_3x13_grid.jpg"
+      ],
+      "notes": [
+        "Historical filename used 3x13, but physical nested trays are 4 columns x 13 rows.",
+        "Top row shows four independent nested lids side-by-side; only leftmost has a label.",
+        "Right two columns are almost entirely empty nested trays — do not merge them."
+      ],
+      "content_by_position": {
+        "R1C1": "USB功率计",
+        "R1C2": "empty",
+        "R1C3": "empty",
+        "R1C4": "empty",
+        "R2C1": "SG90舵机",
+        "R2C2": "empty",
+        "R2C3": "empty",
+        "R2C4": "empty",
+        "R3C1": "HLK-LD1020 / HLK-LD1030",
+        "R3C2": "empty",
+        "R3C3": "empty",
+        "R3C4": "empty",
+        "R4C1": "光耦模块",
+        "R4C2": "empty",
+        "R4C3": "empty",
+        "R4C4": "empty",
+        "R5C1": "5g-1kg 薄膜压力传感器",
+        "R5C2": "empty",
+        "R5C3": "empty",
+        "R5C4": "empty",
+        "R6C1": "HiLink B120SS-3WR3",
+        "R6C2": "223B 触摸开关模块",
+        "R6C3": "empty",
+        "R6C4": "empty",
+        "R7C1": "12V 5015 离心风扇",
+        "R7C2": "喇叭",
+        "R7C3": "empty",
+        "R7C4": "empty",
+        "R8C1": "12V 5015 离心风扇",
+        "R8C2": "0.5-3 线鼻子",
+        "R8C3": "empty",
+        "R8C4": "empty",
+        "R9C1": "12V 5015 离心风扇",
+        "R9C2": "1.25-3.2 0.5mm厚 线鼻子",
+        "R9C3": "empty",
+        "R9C4": "empty",
+        "R10C1": "12V 5015 离心风扇",
+        "R10C2": "ESP-01S配套 继电器开关",
+        "R10C3": "empty",
+        "R10C4": "empty",
+        "R11C1": "红外感应模块",
+        "R11C2": "1路光耦隔离 继电器模块",
+        "R11C3": "empty",
+        "R11C4": "empty",
+        "R12C1": "DHT11",
+        "R12C2": "PAM8403 5V 功放模块",
+        "R12C3": "empty",
+        "R12C4": "empty",
+        "R13C1": "网络变压器",
+        "R13C2": "10W 5欧姆 水泥电阻",
+        "R13C3": "empty",
+        "R13C4": "empty"
+      }
+    },
+    "irregular_14_screws.jpg": {
+      "kind": "box_layout",
+      "layout_type": "irregular",
+      "cell_count": 14,
+      "template_name": "不规则14格",
+      "orientation_in_photo": "landscape_box",
+      "subject": "Machine screws / fasteners",
+      "aliases": [
+        "recognition_irregular_2x5_plus_2x2.jpg"
+      ],
+      "notes": [
+        "Physical layout is fixed: left 2x5 landscape + right 2x2 portrait = 14 cells.",
+        "Unlabeled physical sub-boxes must still be returned as empty cells (is_empty=true), not omitted."
+      ],
+      "physical_structure": {
+        "description": "Left zone: 2 landscape columns x 5 rows. Right zone: 2 portrait columns x 2 rows. Total 14 physical sub-boxes.",
+        "suggested_unified_grid": {
+          "rows": 10,
+          "cols": 4,
+          "rationale": "LCM of left/mid height 5 and right height 2 => rows=10; each landscape row_span=2 col_span=1; each portrait row_span=5 col_span=1"
+        },
+        "columns": [
+          {
+            "col_id": "A",
+            "orientation": "landscape",
+            "cells": [
+              "M1.6*3",
+              "M1.6*5",
+              "M1.6*6",
+              "M2*3",
+              "M2*4"
+            ]
+          },
+          {
+            "col_id": "B",
+            "orientation": "landscape",
+            "cells": [
+              "M2*5 沉/圆头",
+              "M2*6",
+              "M2*12",
+              "M2*14",
+              "M2.5*3"
+            ]
+          },
+          {
+            "col_id": "C",
+            "orientation": "portrait",
+            "cells": [
+              "M3*5",
+              "M2.5*8"
+            ]
+          },
+          {
+            "col_id": "D",
+            "orientation": "portrait",
+            "cells": [
+              "M2.5*10",
+              "M3*6 十字"
+            ]
+          }
+        ]
+      },
+      "content_labels_reading_order": [
+        "M1.6*3",
+        "M1.6*5",
+        "M1.6*6",
+        "M2*3",
+        "M2*4",
+        "M2*5 沉/圆头",
+        "M2*6",
+        "M2*12",
+        "M2*14",
+        "M2.5*3",
+        "M3*5",
+        "M2.5*8",
+        "M2.5*10",
+        "M3*6 十字"
+      ]
+    },
+    "irregular_14_esp32_connectors.jpg": {
+      "kind": "box_layout",
+      "layout_type": "irregular",
+      "cell_count": 14,
+      "template_name": "不规则14格",
+      "orientation_in_photo": "landscape_box",
+      "subject": "Type-C connectors + ESP32 modules + SD slot",
+      "aliases": [
+        "recognition_irregular_2x5_plus_2x2_v2.jpg",
+        "irregular_13_esp32_connectors.jpg"
+      ],
+      "notes": [
+        "Physical layout is fixed: left 2x5 landscape + right 2x2 portrait = 14 cells.",
+        "Unlabeled physical sub-boxes must still be returned as empty cells (is_empty=true), not omitted.",
+        "Right zone bottom-left under ESP32C6 is an empty physical portrait sub-box."
+      ],
+      "physical_structure": {
+        "description": "Left zone: 2 landscape columns x 5 rows. Right zone: 2 portrait columns x 2 rows. Total 14 physical sub-boxes.",
+        "suggested_unified_grid": {
+          "rows": 10,
+          "cols": 4,
+          "rationale": "LCM of left/mid height 5 and right height 2 => rows=10; each landscape row_span=2 col_span=1; each portrait row_span=5 col_span=1"
+        },
+        "columns": [
+          {
+            "col_id": "A",
+            "orientation": "landscape",
+            "cells": [
+              "Type-C 6P",
+              "沉板1.6 Type-C 16P",
+              "不带弹片 Type-C 16P",
+              "TYPE-C 16P (16P不带弹片 三次模顶5A)",
+              "Type-C 24P"
+            ]
+          },
+          {
+            "col_id": "B",
+            "orientation": "landscape",
+            "cells": [
+              "MINI USB母座",
+              "ESP32-SOLO-1",
+              "ESP32-S3 N16R8",
+              "ESP32-C3-WROOM-02",
+              "ESP-32D模组"
+            ]
+          },
+          {
+            "col_id": "C",
+            "orientation": "portrait",
+            "cells": [
+              "ESP32C6-32E-N4",
+              "empty"
+            ]
+          },
+          {
+            "col_id": "D",
+            "orientation": "portrait",
+            "cells": [
+              "BT04-E",
+              "SD卡槽"
+            ]
+          }
+        ]
+      },
+      "content_labels_reading_order": [
+        "Type-C 6P",
+        "沉板1.6 Type-C 16P",
+        "不带弹片 Type-C 16P",
+        "TYPE-C 16P (16P不带弹片 三次模顶5A)",
+        "Type-C 24P",
+        "MINI USB母座",
+        "ESP32-SOLO-1",
+        "ESP32-S3 N16R8",
+        "ESP32-C3-WROOM-02",
+        "ESP-32D模组",
+        "ESP32C6-32E-N4",
+        "empty",
+        "BT04-E",
+        "SD卡槽"
+      ]
+    },
+    "irregular_14_headers.jpg": {
+      "kind": "box_layout",
+      "layout_type": "irregular",
+      "cell_count": 14,
+      "template_name": "不规则14格",
+      "orientation_in_photo": "landscape_box",
+      "subject": "Pin headers / PH / XH connectors",
+      "aliases": [
+        "IMG_2038.JPG",
+        "irregular_11_headers.jpg"
+      ],
+      "notes": [
+        "Physical layout is fixed: left 2x5 landscape + right 2x2 portrait = 14 cells.",
+        "Unlabeled physical sub-boxes must still be returned as empty cells (is_empty=true), not omitted.",
+        "Right zone has three empty portrait sub-boxes; only one labeled PH2.0 4P 卧贴."
+      ],
+      "physical_structure": {
+        "description": "Left zone: 2 landscape columns x 5 rows. Right zone: 2 portrait columns x 2 rows. Total 14 physical sub-boxes.",
+        "suggested_unified_grid": {
+          "rows": 10,
+          "cols": 4,
+          "rationale": "LCM of left/mid height 5 and right height 2 => rows=10; each landscape row_span=2 col_span=1; each portrait row_span=5 col_span=1"
+        },
+        "columns": [
+          {
+            "col_id": "A",
+            "orientation": "landscape",
+            "cells": [
+              "6P 2.54排母",
+              "8P 2.54排母",
+              "15P 2.54排母",
+              "2*20P 排母",
+              "2.54mm 跳线帽"
+            ]
+          },
+          {
+            "col_id": "B",
+            "orientation": "landscape",
+            "cells": [
+              "25P 1.0 下接翻盖",
+              "XH2.54 插座2p",
+              "PH2.0 3P 立贴",
+              "PH2.0 4P 立贴",
+              "PH2.0 3P 卧贴"
+            ]
+          },
+          {
+            "col_id": "C",
+            "orientation": "portrait",
+            "cells": [
+              "empty",
+              "empty"
+            ]
+          },
+          {
+            "col_id": "D",
+            "orientation": "portrait",
+            "cells": [
+              "empty",
+              "PH2.0 4P 卧贴"
+            ]
+          }
+        ]
+      },
+      "content_labels_reading_order": [
+        "6P 2.54排母",
+        "8P 2.54排母",
+        "15P 2.54排母",
+        "2*20P 排母",
+        "2.54mm 跳线帽",
+        "25P 1.0 下接翻盖",
+        "XH2.54 插座2p",
+        "PH2.0 3P 立贴",
+        "PH2.0 4P 立贴",
+        "PH2.0 3P 卧贴",
+        "empty",
+        "empty",
+        "empty",
+        "PH2.0 4P 卧贴"
+      ]
+    },
+    "irregular_14_fpc_adapters.jpg": {
+      "kind": "box_layout",
+      "layout_type": "irregular",
+      "cell_count": 14,
+      "template_name": "不规则14格",
+      "orientation_in_photo": "landscape_box",
+      "subject": "FPC cables/adapters + USB/RJ45/Type-C adapters",
+      "aliases": [
+        "IMG_2039.JPG",
+        "irregular_13_fpc_adapters.jpg"
+      ],
+      "notes": [
+        "Physical layout is fixed: left 2x5 landscape + right 2x2 portrait = 14 cells.",
+        "Unlabeled physical sub-boxes must still be returned as empty cells (is_empty=true), not omitted.",
+        "Right zone top-right next to SD卡模块 is an empty physical portrait sub-box."
+      ],
+      "physical_structure": {
+        "description": "Left zone: 2 landscape columns x 5 rows. Right zone: 2 portrait columns x 2 rows. Total 14 physical sub-boxes.",
+        "suggested_unified_grid": {
+          "rows": 10,
+          "cols": 4,
+          "rationale": "LCM of left/mid height 5 and right height 2 => rows=10; each landscape row_span=2 col_span=1; each portrait row_span=5 col_span=1"
+        },
+        "columns": [
+          {
+            "col_id": "A",
+            "orientation": "landscape",
+            "cells": [
+              "0.5mm 20P 同向 FPC 40cm",
+              "0.5mm 12P 同向 FPC 40cm",
+              "1.0mm 6P 反向 FPC排线",
+              "FPC-12P 0.5/1mm 转接板",
+              "FPC-20P 0.5/1mm 转接板"
+            ]
+          },
+          {
+            "col_id": "B",
+            "orientation": "landscape",
+            "cells": [
+              "Type-C 转接板",
+              "FPC-24P 0.5/1mm 转接板",
+              "SOP/SSOP 20P 转接板",
+              "Mini USB 转接板",
+              "USB3.0 转接板"
+            ]
+          },
+          {
+            "col_id": "C",
+            "orientation": "portrait",
+            "cells": [
+              "SD卡模块",
+              "RJ45 转接板"
+            ]
+          },
+          {
+            "col_id": "D",
+            "orientation": "portrait",
+            "cells": [
+              "empty",
+              "Type-C 2P 注塑接头"
+            ]
+          }
+        ]
+      },
+      "content_labels_reading_order": [
+        "0.5mm 20P 同向 FPC 40cm",
+        "0.5mm 12P 同向 FPC 40cm",
+        "1.0mm 6P 反向 FPC排线",
+        "FPC-12P 0.5/1mm 转接板",
+        "FPC-20P 0.5/1mm 转接板",
+        "Type-C 转接板",
+        "FPC-24P 0.5/1mm 转接板",
+        "SOP/SSOP 20P 转接板",
+        "Mini USB 转接板",
+        "USB3.0 转接板",
+        "SD卡模块",
+        "RJ45 转接板",
+        "empty",
+        "Type-C 2P 注塑接头"
+      ]
+    }
+  },
+  "layout_test_matrix": [
+    {
+      "file": "grid_4x7_power_ics.jpg",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 4,
+      "cell_count": 28
+    },
+    {
+      "file": "grid_4x7_power_ics_v2.jpg",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 4,
+      "cell_count": 28
+    },
+    {
+      "file": "grid_4x7_diodes_leds.jpg",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 4,
+      "cell_count": 28
+    },
+    {
+      "file": "grid_8x7_smd_caps.jpg",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 8,
+      "cell_count": 56
+    },
+    {
+      "file": "grid_8x7_smd_caps_v2.jpg",
+      "layout_type": "grid",
+      "rows": 7,
+      "cols": 8,
+      "cell_count": 56
+    },
+    {
+      "file": "grid_3x11_sensor_modules.jpg",
+      "layout_type": "grid",
+      "rows": 11,
+      "cols": 3,
+      "cell_count": 33
+    },
+    {
+      "file": "grid_3x11_sensor_modules_v2.jpg",
+      "layout_type": "grid",
+      "rows": 11,
+      "cols": 3,
+      "cell_count": 33
+    },
+    {
+      "file": "grid_4x13_mixed_modules.jpg",
+      "layout_type": "grid",
+      "rows": 13,
+      "cols": 4,
+      "cell_count": 52
+    },
+    {
+      "file": "irregular_14_screws.jpg",
+      "layout_type": "irregular",
+      "cell_count": 14
+    },
+    {
+      "file": "irregular_14_esp32_connectors.jpg",
+      "layout_type": "irregular",
+      "cell_count": 14
+    },
+    {
+      "file": "irregular_14_headers.jpg",
+      "layout_type": "irregular",
+      "cell_count": 14
+    },
+    {
+      "file": "irregular_14_fpc_adapters.jpg",
+      "layout_type": "irregular",
+      "cell_count": 14
+    }
+  ]
+}

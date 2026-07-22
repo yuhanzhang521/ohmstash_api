@@ -4,11 +4,13 @@ from typing import Tuple
 
 from fastapi import UploadFile
 
-IMAGE_OPTIMIZE_THRESHOLD_BYTES = 3 * 1024 * 1024
-IMAGE_TARGET_MAX_BYTES = 3 * 1024 * 1024
-IMAGE_MAX_SIDE = 2400
+# Phone photos around 2.5-3MB used to skip optimization and then timeout on VLM
+# round-trips (base64 inflates payload ~33%). Always keep vision payloads modest.
+IMAGE_OPTIMIZE_THRESHOLD_BYTES = 800 * 1024
+IMAGE_TARGET_MAX_BYTES = 1_200_000
+IMAGE_MAX_SIDE = 2000
 IMAGE_UPLOAD_MAX_BYTES = 12 * 1024 * 1024
-JPEG_QUALITY_STEPS = (88, 82, 76, 70)
+JPEG_QUALITY_STEPS = (85, 80, 75, 70, 65)
 
 ALLOWED_IMAGE_EXTENSIONS = {
     ".gif",

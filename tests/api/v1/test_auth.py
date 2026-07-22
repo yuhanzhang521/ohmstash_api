@@ -78,11 +78,11 @@ def test_user_session_token_is_persisted(client: TestClient, db: Session) -> Non
 
 
 def test_decode_box_code_endpoint_reads_data_matrix(client: TestClient) -> None:
-    image_path = Path("tests/dm_test.jpg")
+    image_path = Path("tests/barcode_box_labels.jpg")
     with image_path.open("rb") as image_file:
         response = client.post(
             f"{settings.API_V1_STR}/system/decode_box_code",
-            files={"file": ("dm_test.jpg", image_file, "image/jpeg")},
+            files={"file": ("barcode_box_labels.jpg", image_file, "image/jpeg")},
         )
 
     assert response.status_code == 200
