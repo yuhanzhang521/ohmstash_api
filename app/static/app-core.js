@@ -43,10 +43,12 @@ var DISPLAY_ATTRIBUTE_FALLBACK_KEYS = [
     "Inductance",
 ];
 
-var RECOGNITION_UPLOAD_OPTIMIZE_THRESHOLD_BYTES = 3 * 1024 * 1024;
-var RECOGNITION_UPLOAD_TARGET_BYTES = 3 * 1024 * 1024;
-var RECOGNITION_UPLOAD_MAX_SIDE = 2400;
-var RECOGNITION_UPLOAD_JPEG_QUALITIES = [0.88, 0.82, 0.76, 0.7];
+// Keep in sync with app/services/image_upload.py so phone photos are reduced
+// before upload (base64 + VLM round-trips time out on multi-megabyte originals).
+var RECOGNITION_UPLOAD_OPTIMIZE_THRESHOLD_BYTES = 800 * 1024;
+var RECOGNITION_UPLOAD_TARGET_BYTES = 1_200_000;
+var RECOGNITION_UPLOAD_MAX_SIDE = 2000;
+var RECOGNITION_UPLOAD_JPEG_QUALITIES = [0.85, 0.8, 0.75, 0.7, 0.65];
 var RECOGNITION_UPLOAD_COMPRESSIBLE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp"]);
 var RECOGNITION_UPLOAD_COMPRESSIBLE_TYPES = new Set([
     "image/jpeg",

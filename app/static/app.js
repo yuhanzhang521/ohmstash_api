@@ -1524,6 +1524,12 @@ function setTemplateRecognitionBusy(isBusy) {
 }
 
 function setRecognitionStatus(message, isError = false) {
+    if (isError) {
+        // Keep DOM status message, but drop stale cells/draft so later layout edits
+        // cannot resurrect a previous recognition grid in the result panel.
+        clearRecognitionDraft();
+        resetRecognitionResultState();
+    }
     q("#recognition-summary").textContent = isError ? "失败" : "进行中";
     const viewer = q("#ai-result-viewer");
     viewer.innerHTML = `<div class="empty-panel ${isError ? "error" : ""}">${escapeHtml(message)}</div>`;
@@ -1681,6 +1687,15 @@ function activateRecognitionSession(session, options = {}) {
     } else if (session.status === "failed") {
         setRecognitionStatus(session.error_message || "识别会话失败。", true);
     } else {
+        // Pending sessions must not keep a previous successful result in state,
+        // otherwise editing box rows/cols re-renders the old grid.
+        if (
+            state.loadedRecognitionSessionId !== session.id
+            && (state.recognitionCells.length || state.lastRecognition)
+        ) {
+            clearRecognitionDraft();
+            resetRecognitionResultState();
+        }
         setRecognitionStatus(getRecognitionSessionWaitingMessage(session));
     }
     if (isRecognitionSessionFinished(session)) {
@@ -1780,6 +1795,7 @@ function resetRecognitionResultState() {
     state.recognizedTemplate = null;
     state.matchedTemplateId = null;
     state.lastRecognition = null;
+    state.loadedRecognitionSessionId = null;
     setDraftFieldValue("#recognized-box-name", "");
     setDraftFieldValue("#recognized-box-readable-id", "");
     setDraftFieldValue("#recognized-template-name", "");
@@ -3263,13 +3279,17 @@ function bindEvents() {
     });
     q("#recognized-template-rows").addEventListener("input", () => {
         renderRecognizedTemplatePreview();
-        renderRecognitionCards();
-        saveRecognitionDraftIfAvailable();
+        if (state.recognitionCells.length) {
+            renderRecognitionCards();
+            saveRecognitionDraftIfAvailable();
+        }
     });
     q("#recognized-template-cols").addEventListener("input", () => {
         renderRecognizedTemplatePreview();
-        renderRecognitionCards();
-        saveRecognitionDraftIfAvailable();
+        if (state.recognitionCells.length) {
+            renderRecognitionCards();
+            saveRecognitionDraftIfAvailable();
+        }
     });
     q("#ai-result-viewer").addEventListener("change", (event) => {
         const select = event.target.closest('[data-field="quantity_mode"]');
@@ -3784,7 +3804,6 @@ async function confirmBoxRecognition() {
     }
     discardRecognitionResult("本次识别结果已入库。重新上传图片后会生成新的识别结果。");
     setActiveRecognitionSessionId(null);
-    state.loadedRecognitionSessionId = null;
     showToast(`已入库：${result.created_inventory_items} 条库存`);
 }
 
@@ -5021,10 +5040,31 @@ async function clearDatabase() {
         showToast("清空数据库已取消");
         return;
     }
+    if (!state.serverConfig?.database_name) {
+        await refreshServerConfig();
+    }
+    const databaseName = state.serverConfig?.database_name;
+    if (!databaseName) {
+        throw new Error("无法获取当前数据库名称，请刷新后重试");
+    }
+    const typedDatabaseName = window.prompt(
+        `请再次输入当前数据库名称以确认：\n${databaseName}`,
+        "",
+    );
+    if (typedDatabaseName !== databaseName) {
+        showToast("数据库名称不匹配，清空已取消");
+        return;
+    }
     const result = await apiRequest("/system/database", {
         method: "DELETE",
-        body: JSON.stringify({confirmation}),
+        body: JSON.stringify({
+            confirmation,
+            database_name: databaseName,
+        }),
     });
+    clearRecognitionDraft();
+    resetRecognitionResultState();
+    setActiveRecognitionSessionId(null);
     await refreshAll();
     showToast(`已清空：${result.deleted_boxes} 个盒子，${result.deleted_components} 个元器件`);
 }

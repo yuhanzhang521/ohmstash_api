@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 
@@ -24,6 +25,7 @@ def test_system_config_can_be_read(client: TestClient) -> None:
     assert content["deployment_mode"] == settings.DEPLOYMENT_MODE
     assert content["behind_reverse_proxy"] == settings.behind_reverse_proxy
     assert "public_base_url" in content
+    assert content["database_name"] == make_url(settings.DATABASE_URL).database
 
 
 def test_system_config_rejects_updates_when_behind_reverse_proxy(

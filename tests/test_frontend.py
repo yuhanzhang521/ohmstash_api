@@ -525,6 +525,9 @@ def test_recognition_upload_helpers_target_mobile_large_images() -> None:
                 filename: buildCompressedImageFilename("box.photo.png"),
                 networkMessage: getNetworkErrorMessage(new Error("Load failed")),
                 retryCount: RECOGNITION_NETWORK_RETRY_COUNT,
+                optimizeThreshold: RECOGNITION_UPLOAD_OPTIMIZE_THRESHOLD_BYTES,
+                targetBytes: RECOGNITION_UPLOAD_TARGET_BYTES,
+                maxSide: RECOGNITION_UPLOAD_MAX_SIDE,
             };
         })()
         """
@@ -536,6 +539,9 @@ def test_recognition_upload_helpers_target_mobile_large_images() -> None:
     assert result["filename"] == "box.photo-compressed.jpg"
     assert "短暂中断" in result["networkMessage"]
     assert result["retryCount"] == 2
+    assert result["optimizeThreshold"] == 800 * 1024
+    assert result["targetBytes"] == 1_200_000
+    assert result["maxSide"] == 2000
 
 
 def test_recognition_upload_requests_retry_transient_network_errors() -> None:
@@ -683,6 +689,194 @@ def test_recognition_draft_restores_until_explicitly_cleared() -> None:
     assert result["restoredPrompt"] == "优先使用功能名词"
     assert "已恢复未入库结果" in result["restoredSummary"]
     assert result["draftExistsAfterClear"] is False
+
+
+def test_recognition_error_status_clears_stale_result_state() -> None:
+    result = run_app_js_expression(
+        """
+        (() => {
+            const elements = {};
+            function addElement(selector, value = "") {
+                const element = document.createElement("div");
+                element.value = value;
+                element.checked = false;
+                element.classList = {
+                    add() {},
+                    remove() {},
+                    toggle() {},
+                    contains() { return false; },
+                };
+                elements[selector] = element;
+                return element;
+            }
+
+            [
+                "#recognition-mode",
+                "#recognition-box-id",
+                "#recognition-template-id",
+                "#recognition-layout-type",
+                "#recognition-prompt",
+                "#verification-search-provider-id",
+                "#recognized-box-name",
+                "#recognized-box-readable-id",
+                "#recognized-template-name",
+                "#recognized-template-rows",
+                "#recognized-template-cols",
+                "#recognized-template-layout-json",
+                "#recognition-summary",
+                "#recognition-box-line",
+                "#recognition-template-line",
+                "#recognition-layout-line",
+                "#recognition-overwrite-line",
+                "#recognized-info-panel",
+                "#recognized-box-fields",
+                "#recognized-template-fields",
+                "#recognition-edit-toggle",
+                "#ai-result-viewer",
+            ].forEach((selector) => addElement(selector));
+            addElement("#recognition-overwrite-existing").checked = true;
+            elements["#recognition-mode"].value = "auto_template_box";
+
+            document.querySelector = (selector) => elements[selector] || null;
+            document.querySelectorAll = () => [];
+
+            state.currentUser = {username: "admin"};
+            state.recognitionMode = "auto_template_box";
+            state.loadedRecognitionSessionId = 42;
+            state.lastRecognition = {
+                filename: "old.jpg",
+                latency_ms: 1000,
+                config_id: 1,
+                content_type: "image/jpeg",
+                parsed_result: {cells: [{position_identifier: "R1C1", name: "Old Chip"}]},
+            };
+            state.recognitionCells = [
+                {
+                    position_identifier: "R1C1",
+                    is_empty: false,
+                    name: "Old Chip",
+                    tags: [],
+                    attributes: {},
+                },
+            ];
+            const draftSaved = saveRecognitionDraftFromCurrentState();
+
+            setRecognitionStatus("VLM request failed: The read operation timed out", true);
+
+            return {
+                draftSaved,
+                cells: state.recognitionCells.length,
+                lastRecognition: state.lastRecognition,
+                loadedSessionId: state.loadedRecognitionSessionId,
+                draftExists: window.__storage.has(RECOGNITION_DRAFT_STORAGE_KEY),
+                summary: elements["#recognition-summary"].textContent,
+                viewerHtml: elements["#ai-result-viewer"].innerHTML,
+            };
+        })()
+        """
+    )
+
+    assert result["draftSaved"] is True
+    assert result["cells"] == 0
+    assert result["lastRecognition"] is None
+    assert result["loadedSessionId"] is None
+    assert result["draftExists"] is False
+    assert result["summary"] == "失败"
+    assert "timed out" in result["viewerHtml"]
+
+
+def test_clear_database_sends_database_name() -> None:
+    result = run_app_js_expression(
+        """
+        (async () => {
+            const prompts = [];
+            const requests = [];
+            const elements = {};
+            function addElement(selector, value = "") {
+                const element = document.createElement("div");
+                element.value = value;
+                element.checked = false;
+                element.classList = {
+                    add() {},
+                    remove() {},
+                    toggle() {},
+                    contains() { return false; },
+                };
+                elements[selector] = element;
+                return element;
+            }
+            [
+                "#recognized-box-name",
+                "#recognized-box-readable-id",
+                "#recognized-template-name",
+                "#recognized-template-rows",
+                "#recognized-template-cols",
+                "#recognized-template-layout-json",
+                "#recognition-edit-toggle",
+                "#recognized-info-panel",
+                "#recognized-box-fields",
+                "#recognized-template-fields",
+                "#recognition-mode",
+                "#recognition-session-list",
+                "#recognition-history-count",
+            ].forEach((selector) => addElement(selector));
+            elements["#recognition-mode"].value = "existing_box";
+            document.querySelector = (selector) => elements[selector] || null;
+            document.querySelectorAll = () => [];
+
+            window.confirm = () => true;
+            window.prompt = (message, defaultValue = "") => {
+                prompts.push(String(message));
+                if (String(message).includes("CLEAR DATABASE")) {
+                    return "CLEAR DATABASE";
+                }
+                if (String(message).includes("数据库名称")) {
+                    return "ohmstash";
+                }
+                return defaultValue;
+            };
+            showToast = () => {};
+            state.serverConfig = {database_name: "ohmstash"};
+            state.authToken = "token";
+            state.recognitionSessions = [];
+            const originalApiRequest = apiRequest;
+            apiRequest = async (path, options = {}) => {
+                requests.push({
+                    path,
+                    method: options.method || "GET",
+                    body: options.body || null,
+                });
+                if (path === "/system/database") {
+                    return {
+                        deleted_boxes: 1,
+                        deleted_components: 2,
+                        deleted_tags: 0,
+                        deleted_templates: 0,
+                    };
+                }
+                return originalApiRequest(path, options);
+            };
+            refreshAll = async () => {};
+            await clearDatabase();
+            return {
+                prompts,
+                requests,
+            };
+        })()
+        """
+    )
+
+    assert any("CLEAR DATABASE" in prompt for prompt in result["prompts"])
+    assert any("ohmstash" in prompt for prompt in result["prompts"])
+    database_request = next(
+        item for item in result["requests"] if item["path"] == "/system/database"
+    )
+    assert database_request["method"] == "DELETE"
+    body = json.loads(database_request["body"])
+    assert body == {
+        "confirmation": "CLEAR DATABASE",
+        "database_name": "ohmstash",
+    }
 
 
 def test_recognition_uses_sessions_instead_of_unload_warning() -> None:

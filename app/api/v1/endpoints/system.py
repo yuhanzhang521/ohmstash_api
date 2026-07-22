@@ -48,6 +48,7 @@ def build_server_config_response() -> schemas.ServerConfig:
         deployment_mode=settings.DEPLOYMENT_MODE,
         behind_reverse_proxy=settings.behind_reverse_proxy,
         public_base_url=settings.PUBLIC_BASE_URL,
+        database_name=_current_database_name(),
     )
 
 

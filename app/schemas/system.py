@@ -24,6 +24,7 @@ class ServerConfig(BaseModel):
     deployment_mode: str
     behind_reverse_proxy: bool
     public_base_url: Optional[str]
+    database_name: str
 
 
 class ServerConfigUpdate(BaseModel):
